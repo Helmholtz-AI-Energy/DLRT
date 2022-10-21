@@ -8,7 +8,7 @@ repos:
     -   id: end-of-file-fixer
     -   id: check-yaml
     -   id: debug-statements
-    -   id: double-quote-string-fixer
+#    -   id: double-quote-string-fixer
     -   id: name-tests-test
     -   id: requirements-txt-fixer
 -   repo: https://github.com/asottile/setup-cfg-fmt
@@ -31,10 +31,10 @@ repos:
     hooks:
     -   id: pyupgrade
         args: [--py37-plus]
--   repo: https://github.com/pre-commit/mirrors-autopep8
-    rev: v1.7.0
-    hooks:
-    -   id: autopep8
+#-   repo: https://github.com/pre-commit/mirrors-autopep8
+#    rev: v1.7.0
+#    hooks:
+#    -   id: autopep8
 -   repo: https://github.com/PyCQA/flake8
     rev: 5.0.4
     hooks:

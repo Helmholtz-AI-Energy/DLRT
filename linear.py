@@ -9,7 +9,7 @@ from torch import Tensor
 
 class DLRALinear(nn.Module):
     # overwrite the original layer depending on its type?
-    __constants__ = ['in_features', 'out_features']
+    __constants__ = ["in_features", "out_features"]
     in_features: int
     out_features: int
     weight: Tensor
@@ -20,7 +20,7 @@ class DLRALinear(nn.Module):
         out_features: int,
         rank: int = None,
         bias: bool = True,
-        init_method: str = 'random',
+        init_method: str = "random",
         device=None,
         dtype=None,
     ) -> None:
@@ -41,9 +41,9 @@ class DLRALinear(nn.Module):
         rank = rank if rank is not None else min([in_features, out_features])
         if rank > in_features:
             raise ValueError(
-                f'rank > in_features ({rank} > {in_features}) use nn.Linear or reduce rank',
+                f"rank > in_features ({rank} > {in_features}) use nn.Linear or reduce rank",
             )
-        factory_kwargs = {'device': device, 'dtype': dtype}
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
 
         self.in_features = in_features
@@ -51,12 +51,12 @@ class DLRALinear(nn.Module):
         if bias:
             self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
         else:
-            self.register_parameter('bias', None)
+            self.register_parameter("bias", None)
 
         self.reset_parameters()
         self.dlra = True
         self.init_method = init_method
-        assert init_method in ['random', 'svd'], "init_method must be in ['random', 'svd']"
+        assert init_method in ["random", "svd"], "init_method must be in ['random', 'svd']"
 
         # need k, lt, s, bias
         # K -> U @ S, L -> V @ S.T
@@ -65,7 +65,7 @@ class DLRALinear(nn.Module):
         self.lt = nn.Parameter(torch.empty((rank, out_features), **factory_kwargs))
 
         self.reset_parameters()
-        self.train_case = 'k'
+        self.train_case = "k"
 
         with torch.no_grad():
             # u, vt, n, m, uprev, vtprev
@@ -86,15 +86,15 @@ class DLRALinear(nn.Module):
 
     def extra_repr(self) -> str:
         return (
-            f'in_features={self.in_features}, rank={self.rank}, '
-            f'out_features={self.out_features}, bias={self.bias is not None}'
+            f"in_features={self.in_features}, rank={self.rank}, "
+            f"out_features={self.out_features}, bias={self.bias is not None}"
         )
 
     def reset_parameters(self) -> None:
         # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
         # uniform(-1/sqrt(in_features), 1/sqrt(in_features)). For details, see
         # https://github.com/pytorch/pytorch/issues/57109
-        if self.init_method == 'random':
+        if self.init_method == "random":
             nn.init.kaiming_uniform_(self.k, a=math.sqrt(5))
             nn.init.kaiming_uniform_(self.s, a=math.sqrt(5))
             nn.init.kaiming_uniform_(self.lt, a=math.sqrt(5))
@@ -125,13 +125,13 @@ class DLRALinear(nn.Module):
 
     def change_training_case(self, case):
         # switch -> if current train case is k/l, do post for
-        if self.train_case in 'k':
+        if self.train_case in "k":
             pass
 
     def forward(self, input: Tensor) -> Tensor:
-        if self.train_case == 'k':  # k-step
+        if self.train_case == "k":  # k-step
             z = torch.matmul(torch.matmul(input, self.k), self.aux_Vt) + self.aux_b
-        elif self.train_case == 'l':  # l-step
+        elif self.train_case == "l":  # l-step
             z = torch.matmul(torch.matmul(input, self.aux_U), self.lt) + self.aux_b
         else:  # s-step
             z = (
