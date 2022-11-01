@@ -34,11 +34,13 @@ class DLRALinear(nn.Module):
         bias
         device
         dtype
-        rank
+        rank:
+            top-rank approx. this will cut to the top-rank eigenvectors
+            for the math, this is the inner dim of the decomp
         load_weights
         """
 
-        rank = rank if rank is not None else min([in_features, out_features])
+        self.rank = rank if rank is not None else min([in_features, out_features])
         if rank > in_features:
             raise ValueError(
                 f"rank > in_features ({rank} > {in_features}) use nn.Linear or reduce rank",
@@ -53,7 +55,6 @@ class DLRALinear(nn.Module):
         else:
             self.register_parameter("bias", None)
 
-        self.reset_parameters()
         self.dlra = True
         self.init_method = init_method
         assert init_method in ["random", "svd"], "init_method must be in ['random', 'svd']"
@@ -67,10 +68,22 @@ class DLRALinear(nn.Module):
         self.reset_parameters()
         self.train_case = "k"
 
+        self.set_aux_vars()
+
+    def extra_repr(self) -> str:
+        return (
+            f"in_features={self.in_features}, rank={self.rank}, "
+            f"out_features={self.out_features}, bias={self.bias is not None}"
+        )
+
+    def set_aux_vars(self):
         with torch.no_grad():
+            factory_kwargs = {"device": self.k.device, "dtype": self.k.dtype}
             # u, vt, n, m, uprev, vtprev
             self.u, _ = torch.linalg.qr(self.k)
             self.u.requires_grad = False
+            # overwrite the old vars once there are new ones
+            self.uprev = torch.empty(tuple(self.u.shape), **factory_kwargs)
             # aux_N -> aux_Unp1.T @ aux_U
             #   used in setting s,
             self.n = self.u.T @ self.uprev
@@ -78,17 +91,9 @@ class DLRALinear(nn.Module):
             # aux_Vtnp1 -> q from qr(lt.T)
             self.vt, _ = torch.linalg.qr(self.lt.T)
             self.vt.requires_grad = False
+            self.vtprev = torch.empty(tuple(self.vt.shape), **factory_kwargs)
             # aux_M -> aux_Vtnp1 @ aux_Vt.T
             self.m = self.vt @ self.vtprev.T
-            # overwrite the old vars once there is are new ones
-            self.uprev = torch.empty(tuple(self.u.shape), **factory_kwargs)
-            self.vtprev = torch.empty(tuple(self.vt.shape), **factory_kwargs)
-
-    def extra_repr(self) -> str:
-        return (
-            f"in_features={self.in_features}, rank={self.rank}, "
-            f"out_features={self.out_features}, bias={self.bias is not None}"
-        )
 
     def reset_parameters(self) -> None:
         # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
@@ -122,6 +127,7 @@ class DLRALinear(nn.Module):
                 fan_in, _ = nn.init._calculate_fan_in_and_fan_out(weights)
                 bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
                 nn.init.uniform_(self.bias, -bound, bound)
+        self.set_aux_vars()
 
     def change_training_case(self, case):
         # switch -> if current train case is k/l, do post for
@@ -130,15 +136,11 @@ class DLRALinear(nn.Module):
 
     def forward(self, input: Tensor) -> Tensor:
         if self.train_case == "k":  # k-step
-            z = torch.matmul(torch.matmul(input, self.k), self.aux_Vt) + self.aux_b
+            return ((input @ self.k) @ self.aux_Vt) + self.aux_b
         elif self.train_case == "l":  # l-step
-            z = torch.matmul(torch.matmul(input, self.aux_U), self.lt) + self.aux_b
+            return ((input @ self.aux_U) @ self.lt) + self.aux_b
         else:  # s-step
-            z = (
-                torch.matmul(torch.matmul(torch.matmul(input, self.aux_Unp1), self.s), self.aux_Vtnp1)
-                + self.b
-            )
-        return z
+            return (((input @ self.aux_Unp1) @ self.s) @ self.aux_Vtnp1) + self.b
 
     @torch.no_grad()
     def kl_prepro(self):
