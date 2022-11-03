@@ -147,24 +147,11 @@ class DLRALinear(DLRAModule):
         # disable bias training
         self.bias.requires_grad = False
         # k prepro
-        # k -> aux_U @ s (todo: s is trainable here?)
+        # k -> aux_U @ s
         self.k = self.u @ self.s
         # l prepro
-        # lt -> s @ aux_Vt   (todo: s is trainable?)
+        # lt -> s @ aux_Vt
         self.lt = self.s @ self.vt
-
-    # @torch.no_grad()
-    # def k_step_prepro(self):
-    #     # set bias to not train
-    #     self.bias.requires_grad = False
-    #     # set k to be aux_U @ s (todo: s is trainable here?)
-    #     #   aux_U is not trainable here
-    # @torch.no_grad()
-    # def l_step_prepro(self):
-    #     # make sure bias is not training
-    #     self.bias.requires_grad = False
-    #     # lt = s @ aux_Vt   (todo: s is trainable?)
-    #     pass
 
     @torch.no_grad()
     def kl_postpro_s_prepro(self):
@@ -399,11 +386,11 @@ class DLRALinearAdaptive(DLRAModule):
         # disable bias training
         self.bias.requires_grad = False
         # k prepro
-        # k -> aux_U @ s (todo: s is trainable here?)
+        # k -> aux_U @ s
         kls = self.s[: self.low_rank, : self.low_rank]
         self.k[:, : self.low_rank] = self.u[:, : self.low_rank] @ kls
         # l prepro
-        # lt -> s @ aux_Vt   (todo: s is trainable?)
+        # lt -> s @ aux_Vt
         self.lt[: self.low_rank] = kls @ self.vt[: self.low_rank]
 
     @torch.no_grad()
@@ -445,7 +432,6 @@ class DLRALinearAdaptive(DLRAModule):
         v2 = vh2.T
         # d, u2, v2 = tf.linalg.svd(s_small)
 
-        # TODO: why are we settng the tolerance to the norm of the singular vectors?
         # absolute value treshold (try also relative one)
         tol = self.eps_adapt * torch.linalg.norm(sing)
         rmax = sing.shape[0] // 2
