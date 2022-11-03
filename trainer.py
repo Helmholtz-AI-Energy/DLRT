@@ -4,9 +4,10 @@ import torch
 import torch.nn as nn
 
 from linear import DLRALinear
+from linear import DLRALinearAdaptive
 
 
-class DLRANet(nn.Module):
+class DLRATrainer(nn.Module):
     # class which will wrap whole models
     def __init__(self, torch_model, rank, init_method="random"):
         super().__init__()
@@ -22,15 +23,14 @@ class DLRANet(nn.Module):
         module_output = module
         # this will remove all the BatchNorm layers from the network
         if isinstance(module, nn.Linear):
-            module_output = DLRALinear(
+            module_output = DLRALinearAdaptive(
                 in_features=module.in_features,
                 out_features=module.out_features,
                 bias=module.bias is not None,
                 device=module.weight.device,
                 dtype=module.weight.dtype,
                 # DLRA params
-                init_method=self.init_method,
-                rank=self.rank,
+                low_rank_percent=None,
             )
 
         for name, child in module.named_children():
@@ -38,5 +38,16 @@ class DLRANet(nn.Module):
         del module
         return module_output
 
+    def _cycle_layers(self, module):
+        # this will remove all the BatchNorm layers from the network
+        try:
+            module.cycle_training_case()
+        except AttributeError:
+            pass
+
+        for name, child in module.named_children():
+            self.cycle_layers(child)
+
     def forward(self, x):
+        self._cycle_layers(self.model)
         return self.model.forward(x)
