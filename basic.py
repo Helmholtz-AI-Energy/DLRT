@@ -3,12 +3,12 @@ from __future__ import annotations
 import torch.nn as nn
 
 
-class DLRAModule(nn.Module):
+class DLRTModule(nn.Module):
     # parent class to abstract some methods
     def __init__(self):
         super().__init__()
         self.train_case = None
-        self.dlra = True
+        self.dlrt = True
         self.prev_case = "s"
 
     def kl_postpro_s_prepro(self):

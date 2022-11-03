@@ -7,10 +7,10 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from basic import DLRAModule
+from basic import DLRTModule
 
 
-class DLRALinear(DLRAModule):
+class DLRTLinear(DLRTModule):
     # overwrite the original layer depending on its type?
     __constants__ = ["in_features", "out_features"]
     in_features: int
@@ -53,12 +53,13 @@ class DLRALinear(DLRAModule):
 
         self.in_features = in_features
         self.out_features = out_features
+        self.train_bias = bias
         if bias:
             self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
         else:
             self.bias = torch.zeros(out_features, requires_grad=False, **factory_kwargs)
 
-        self.dlra = True
+        self.dlrt = True
         self.init_method = init_method
         assert init_method in ["random", "svd"], "init_method must be in ['random', 'svd']"
 
@@ -136,11 +137,12 @@ class DLRALinear(DLRAModule):
 
     def forward(self, input: Tensor) -> Tensor:
         if self.train_case == "k":  # k-step
-            return ((input @ self.k) @ self.aux_Vt) + self.aux_b
+            ret = (input @ self.k) @ self.vt
         elif self.train_case == "l":  # l-step
-            return ((input @ self.aux_U) @ self.lt) + self.aux_b
+            ret = (input @ self.u) @ self.lt
         else:  # s-step
-            return (((input @ self.aux_Unp1) @ self.s) @ self.aux_Vtnp1) + self.b
+            ret = ((input @ self.unp1) @ self.s) @ self.vtnp1
+        return ret if not self.train_bias else ret + self.bias
 
     @torch.no_grad()
     def kl_prepro(self):
@@ -180,7 +182,7 @@ class DLRALinear(DLRAModule):
         self.s = self.n @ self.s @ self.m.T
 
 
-class DLRALinearAdaptive(DLRAModule):
+class DLRTLinearAdaptive(DLRTModule):
     # overwrite the original layer depending on its type?
     __constants__ = ["in_features", "out_features"]
     in_features: int
@@ -221,6 +223,7 @@ class DLRALinearAdaptive(DLRAModule):
         factory_kwargs = {"device": device, "dtype": dtype}
         self.in_features = in_features
         self.out_features = out_features
+        self.train_bias = bias
         if bias:
             self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
         else:
@@ -245,7 +248,7 @@ class DLRALinearAdaptive(DLRAModule):
         # self.rmax = min(rmax, int(min([in_features, out_features]) / 2))
         # self.low_rank = low_rank if low_rank is not None else min([in_features, out_features])
 
-        self.dlra = True
+        self.dlrt = True
         self.init_method = init_method
         assert init_method in ["random", "svd"], "init_method must be in ['random', 'svd']"
 
@@ -374,12 +377,16 @@ class DLRALinearAdaptive(DLRAModule):
 
     def forward(self, input: Tensor) -> Tensor:
         if self.train_case == "k":  # k-step
-            return ((input @ self.k[:, : self.low_rank]) @ self.vt[: self.low_rank]) + self.bias
+            ret = (input @ self.k[:, : self.low_rank]) @ self.vt[: self.low_rank]
         elif self.train_case == "l":  # l-step
-            return ((input @ self.u[:, : self.low_rank]) @ self.lt[: self.low_rank]) + self.bias
+            ret = (input @ self.u[:, : self.low_rank]) @ self.lt[: self.low_rank]
         else:  # s-step
+            if self.train_bias:
+                self.bias.requires_grad = True
             lr2 = 2 * self.low_rank
-            return (((input @ self.unp1[:, :lr2]) @ self.s[:lr2, :lr2]) @ self.vtnp1[:lr2]) + self.bias
+            ret = ((input @ self.unp1[:, :lr2]) @ self.s[:lr2, :lr2]) @ self.vtnp1[:lr2]
+
+        return ret if not self.train_bias else ret + self.bias
 
     @torch.no_grad()
     def kl_prepro(self):

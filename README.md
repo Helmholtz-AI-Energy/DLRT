@@ -1,8 +1,8 @@
-# DLRA
+# DLRT
 
 # TODO list
 - [x] linear layer
-- [ ] adaptive linear layer
+- [x] adaptive linear layer
 - [ ] test linear layers
 - [ ] conv layer
 - [ ] adaptive conv layer

@@ -97,7 +97,7 @@ class DenseLinear(keras.layers.Layer):
         )
 
 
-class DLRALayerAdaptive(keras.layers.Layer):
+class DLRTLayerAdaptive(keras.layers.Layer):
     def __init__(
         self,
         input_dim: int,
@@ -105,7 +105,7 @@ class DLRALayerAdaptive(keras.layers.Layer):
         low_rank=10,
         epsAdapt=0.1,
         rmax_total=100,
-        name="dlra_block",
+        name="dlrt_block",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -416,13 +416,13 @@ class DLRALayerAdaptive(keras.layers.Layer):
         return low_rank_weights, full_rank_weights
 
 
-class DLRALayerLinear(keras.layers.Layer):
+class DLRTLayerLinear(keras.layers.Layer):
     def __init__(
         self,
         input_dim: int,
         units=32,
         low_rank=10,
-        name="dlra_block",
+        name="dlrt_block",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -724,7 +724,7 @@ class DLRALayerLinear(keras.layers.Layer):
         return low_rank_weights, full_rank_weights
 
 
-class DLRALayerAdaptiveLinear(keras.layers.Layer):
+class DLRTLayerAdaptiveLinear(keras.layers.Layer):
     def __init__(
         self,
         input_dim: int,
@@ -732,7 +732,7 @@ class DLRALayerAdaptiveLinear(keras.layers.Layer):
         low_rank=10,
         epsAdapt=0.1,
         rmax_total=100,
-        name="dlra_block",
+        name="dlrt_block",
         **kwargs,
     ):
         super().__init__(**kwargs)
