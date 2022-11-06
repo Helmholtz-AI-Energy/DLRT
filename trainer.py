@@ -48,48 +48,67 @@ class DLRTTrainer(nn.Module):
         return module_output
 
     def cycle_layers(self):
-        self.__run_command_on_layers(module=self.model, command="cycle_training_case")
+        self.__run_command_on_dlrt_layers(module=self.model, command="cycle_training_case")
 
     def set_layer_case(self, case):
-        self.__run_command_on_layers(
+        if case in ["k", "l"]:
+            self.model.eval()
+        else:  # s case -> train all layers
+            self.model.train()
+        self.__run_command_on_dlrt_layers(
             module=self.model,
             command="change_training_case",
             kwargs={"case": case},
         )
 
     def run_klprepro(self):
-        self.__run_command_on_layers(module=self.model, command="kl_prepro")
+        self.__run_command_on_dlrt_layers(module=self.model, command="kl_prepro")
 
     def run_kl_postpro_s_prepro(self):
-        self.__run_command_on_layers(module=self.model, command="kl_postpro_s_prepro")
+        self.__run_command_on_dlrt_layers(module=self.model, command="kl_postpro_s_prepro")
 
-    def __run_command_on_layers(self, module, command, kwargs=None):
+    def __run_command_on_dlrt_layers(self, module, command, kwargs=None):
         if kwargs is None:
             kwargs = {}
-        try:
+
+        if hasattr(module, "dlrt"):
             getattr(module, command)(**kwargs)
-        except AttributeError:
-            pass
 
         for name, child in module.named_children():
-            self.__run_command_on_layers(child, command, kwargs)
+            self.__run_command_on_dlrt_layers(child, command, kwargs)
 
     def train_step(self, model_inputs, labels):
         self.optimizer.zero_grad()
+
         self.run_klprepro()
         # K
-        self._set_layer_training_case(self.model, "k")
+        self.set_layer_case("k")
         # TODO: autocast model with AMP
         kret = self.model(model_inputs)
         kloss = self.loss_fn(kret, labels)
         kloss.backward()
-        self.optimizer.step()
         # L
-        self._set_layer_training_case(self.model, "k")
+        self.set_layer_case("l")
+        lret = self.model(model_inputs)
+        lloss = self.loss_fn(lret, labels)
+        lloss.backward()
+
         # optimizer
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+
+        # S
+        self.run_kl_postpro_s_prepro()
+
+        self.set_layer_case("s")
+        sret = self.model(model_inputs)
+        sloss = self.loss_fn(sret, labels)
+        sloss.backward()
+
+        # optimizer
+        self.optimizer.step()
 
         # postpro
-        self.run_kl_postpro_s_prepro()
         # self._cycle_layers(self.model)
         # self.model.forward(x)
-        return
+        return sloss

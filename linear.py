@@ -11,6 +11,8 @@ from basic import DLRTModule
 
 
 class DLRTLinear(DLRTModule):
+    # should this instead inherit from nn.Linear?
+    #   doesnt need to, everything in nn.Linear is overwritten
     # overwrite the original layer depending on its type?
     __constants__ = ["in_features", "out_features"]
     in_features: int
@@ -53,11 +55,10 @@ class DLRTLinear(DLRTModule):
 
         self.in_features = in_features
         self.out_features = out_features
-        self.train_bias = bias
         if bias:
             self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
         else:
-            self.bias = torch.zeros(out_features, requires_grad=False, **factory_kwargs)
+            self.register_parameter("bias", None)
 
         self.dlrt = True
         self.init_method = init_method
@@ -136,13 +137,13 @@ class DLRTLinear(DLRTModule):
         self.set_aux_vars()
 
     def forward(self, input: Tensor) -> Tensor:
-        if self.train_case == "k":  # k-step
+        if self.train_case == "k" or not self.training:  # k-step
             ret = (input @ self.k) @ self.vt
         elif self.train_case == "l":  # l-step
             ret = (input @ self.u) @ self.lt
         else:  # s-step
             ret = ((input @ self.unp1) @ self.s) @ self.vtnp1
-        return ret if not self.train_bias else ret + self.bias
+        return ret if self.bias is None else ret + self.bias
 
     @torch.no_grad()
     def kl_prepro(self):
@@ -223,11 +224,10 @@ class DLRTLinearAdaptive(DLRTModule):
         factory_kwargs = {"device": device, "dtype": dtype}
         self.in_features = in_features
         self.out_features = out_features
-        self.train_bias = bias
         if bias:
             self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
         else:
-            self.bias = torch.zeros(out_features, requires_grad=False, **factory_kwargs)
+            self.register_parameter("bias", None)
 
         if low_rank_percent is None:
             # set the max low_rank to be such that the
@@ -352,7 +352,6 @@ class DLRTLinearAdaptive(DLRTModule):
             self.s *= 0
             self.s += torch.diag(vec_s[: self.low_rank].clone().detach())
             self.lt *= 0
-            # TODO: transpose needed??
             self.lt += ltt.T[:, : self.low_rank].clone().detach()
             if self.bias is not None:
                 fan_in, _ = nn.init._calculate_fan_in_and_fan_out(weights)
@@ -366,7 +365,7 @@ class DLRTLinearAdaptive(DLRTModule):
 
     def cycle_training_case(self):
         # cycle between the cases -> to be used in the trainer/model class
-        if self.train_case == "k":
+        if self.train_case == "k" or not self.training:
             self.train_case = "l"
         elif self.train_case == "l":
             self.kl_postpro_s_prepro()
@@ -381,12 +380,10 @@ class DLRTLinearAdaptive(DLRTModule):
         elif self.train_case == "l":  # l-step
             ret = (input @ self.u[:, : self.low_rank]) @ self.lt[: self.low_rank]
         else:  # s-step
-            if self.train_bias:
-                self.bias.requires_grad = True
             lr2 = 2 * self.low_rank
             ret = ((input @ self.unp1[:, :lr2]) @ self.s[:lr2, :lr2]) @ self.vtnp1[:lr2]
 
-        return ret if not self.train_bias else ret + self.bias
+        return ret if self.bias is None else ret + self.bias
 
     @torch.no_grad()
     def kl_prepro(self):
@@ -453,9 +450,12 @@ class DLRTLinearAdaptive(DLRTModule):
         rmax = torch.maximum(rmax, torch.full(tuple(rmax.shape), 2, **factory))
 
         # update s
-        self.s[:rmax, :rmax] = torch.diag(sing[:rmax], **factory)
+        # self.s[:rmax, :rmax] = torch.diag(sing[:rmax], **factory)
+        self.s = torch.diag(sing[:rmax], **factory)
 
         # update u and v
-        self.u[:, :rmax] = self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax]
-        self.vt[:rmax, :] = v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :]
+        # self.u[:, :rmax] = self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax]
+        # self.vt[:rmax, :] = v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :]
+        self.u = self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax]
+        self.vt = v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :]
         self.low_rank = int(rmax)

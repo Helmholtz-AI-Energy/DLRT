@@ -27,6 +27,7 @@ class DLRTModule(nn.Module):
 
     def cycle_training_case(self):
         # make sure that everything runs from k -> l -> s
+        self.train()
         if self.train_case == "k" and self.prev_case == "s":
             self.train_case = "l"
         elif self.train_case == "l" and self.prev_case == "k":
