@@ -10,7 +10,7 @@ from torch import Tensor
 from basic import DLRTModule
 
 
-class DLRTLinear(DLRTModule):
+class DLRTLinearFixed(DLRTModule):
     # should this instead inherit from nn.Linear?
     #   doesnt need to, everything in nn.Linear is overwritten
     # overwrite the original layer depending on its type?
@@ -42,7 +42,6 @@ class DLRTLinear(DLRTModule):
         low_rank:
             top-rank approx. this will cut to the top-rank eigenvectors
             for the math, this is the inner dim of the decomp
-        load_weights
         """
 
         self.low_rank = low_rank if low_rank is not None else min([in_features, out_features])
@@ -174,41 +173,44 @@ class DLRTLinear(DLRTModule):
         return ret if self.bias is None else ret + self.bias
 
     @torch.no_grad()
-    def kl_prepro(self):
-        # disable bias training
+    def _k_preprocess(self):
         self.bias.requires_grad = False
         # k prepro
         # k -> aux_U @ s
-        self.k = self.u @ self.s
-        # l prepro
-        # lt -> s @ aux_Vt
-        self.lt = self.s @ self.vt
+        self.k.set_(self.u @ self.s)
 
     @torch.no_grad()
-    def kl_postpro_s_prepro(self):
-        # ------- k postpro ----------------------------------
+    def _l_preprocess(self):
+        # lt -> s @ aux_Vt
+        self.lt.set_(self.s @ self.vt)
+
+    @torch.no_grad()
+    def _k_postprocess(self):
         # aux_Unp1 -> q from qr(k)
         #   aux_Unp1 used in s-step forward, can keep in u
-        self.u, _ = torch.linalg.qr(self.k)
+        self.u.set_(torch.linalg.qr(self.k)[0])
         self.u.requires_grad = False
         # aux_N -> aux_Unp1.T @ aux_U
         #   used in setting s,
-        self.n = self.u.T @ self.unp1
-        # ------- l postpro ----------------------------------
+        self.n.set_(self.u.T @ self.unp1)
+
+    @torch.no_grad()
+    def _l_postprocess(self):
         # aux_Vtnp1 -> q from qr(lt.T)
-        self.vt, _ = torch.linalg.qr(self.lt.T)
+        self.vt.set_(torch.linalg.qr(self.lt.T)[0])
         # aux_M -> aux_Vtnp1 @ aux_Vt.T
-        self.m = self.vt @ self.vtnp1.T
+        self.m.set_(self.vt @ self.vtnp1.T)
         # overwrite the old vars once there is are new ones
-        self.unp1 = self.u
-        self.vtnp1 = self.vt
-        # ------- s prepro ------------------------------------
-        # bias is trainable for the s step
+        self.unp1.set_(self.u.data)
+        self.vtnp1.set_(self.vt.data)
+
+    @torch.no_grad()
+    def _s_preprocess(self):
         self.bias.requires_grad = True
         # set aux_U -> aux_Unp1  # done above
         # set aux_Vt -> aux_Vtnp1  # done previously now
         # set s -> (aux_N @ s) @ aux_M.T
-        self.s = self.n @ self.s @ self.m.T
+        self.s.set_(self.n @ self.s @ self.m.T)
 
 
 class DLRTLinearAdaptive(DLRTModule):
@@ -431,19 +433,24 @@ class DLRTLinearAdaptive(DLRTModule):
         return ret if self.bias is None else ret + self.bias
 
     @torch.no_grad()
-    def kl_prepro(self):
-        # disable bias training
+    def _k_preprocess(self):
         self.bias.requires_grad = False
         # k prepro
         # k -> aux_U @ s
         kls = self.s[: self.low_rank, : self.low_rank]
-        self.k[:, : self.low_rank] = self.u[:, : self.low_rank] @ kls
-        # l prepro
-        # lt -> s @ aux_Vt
-        self.lt[: self.low_rank] = kls @ self.vt[: self.low_rank]
+        # self.k[:, : self.low_rank] = self.u[:, : self.low_rank] @ kls
+        self.k.set_(self.u[:, : self.low_rank] @ kls)
 
     @torch.no_grad()
-    def kl_postpro_s_prepro(self):
+    def _l_preprocess(self):
+        # lt -> s @ aux_Vt
+        self.bias.requires_grad = False
+        kls = self.s[: self.low_rank, : self.low_rank]
+        # self.lt[: self.low_rank] = kls @ self.vt[: self.low_rank]
+        self.lt.set_(kls @ self.vt[: self.low_rank])
+
+    @torch.no_grad()
+    def _k_postprocess(self):
         lr = self.low_rank
         lr2 = 2 * self.low_rank
         # ------- k postpro ----------------------------------
@@ -460,7 +467,11 @@ class DLRTLinearAdaptive(DLRTModule):
         aux_n = self.unp1[:, :lr2].T @ self.u[:, :lr]
         self.n[: 2 * lr, :lr] = aux_n
         self.n.requires_grad = False
-        # ------- l postpro ----------------------------------
+
+    @torch.no_grad()
+    def _l_postprocess(self):
+        lr = self.low_rank
+        lr2 = 2 * self.low_rank
         l_extended = torch.cat((self.lt[:lr].T, self.vt[:lr]), dim=1)
         aux_Vnp1, _ = torch.linalg.qr(l_extended)
         self.vtnp1[:lr2] = aux_Vnp1.T
@@ -468,12 +479,17 @@ class DLRTLinearAdaptive(DLRTModule):
         self.m[:lr2, :lr] = m
         self.vtnp1.requires_grad = False
         self.m.requires_grad = False
-        # ------- s prepro ------------------------------------
+
+    @torch.no_grad()
+    def _s_preprocess(self):
+        lr = self.low_rank
+        lr2 = 2 * self.low_rank
         # bias is trainable for the s step
         self.bias.requires_grad = True
         # set s -> (aux_N @ s) @ aux_M.T
         self.s[:lr2, :lr2] = self.n[:lr2, :lr] @ self.s[:lr, :lr] @ self.m[:lr2, :lr].T
 
+    @torch.no_grad()
     def rank_adaption(self):
         # 1) compute SVD of S
         # d=singular values, u2 = left singuar vecs, v2= right singular vecs
@@ -491,16 +507,15 @@ class DLRTLinearAdaptive(DLRTModule):
                 rmax = j
                 break
 
-        factory = {"dtype": sing.dtype, "device": sing.device}
         # rmax = max(min(rmax, self.rmax), 2)  # -> handled by the 2 in the for loop above
 
         # update s
         # self.s[:rmax, :rmax] = torch.diag(sing[:rmax], **factory)
-        self.s = torch.diag(sing[:rmax], **factory)
+        self.s.set_(torch.diag(sing[:rmax]).to(device=self.s.device, dtype=self.s.dtype))
 
         # update u and v
         # self.u[:, :rmax] = self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax]
         # self.vt[:rmax, :] = v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :]
-        self.u = self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax]
-        self.vt = v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :]
+        self.u.set_(self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax])
+        self.vt.set_(v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :])
         self.low_rank = int(rmax)

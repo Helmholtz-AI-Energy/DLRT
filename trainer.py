@@ -3,8 +3,10 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from linear import DLRTLinear
+from conv import DLRTConv2dAdaptive
+from conv import DLRTConv2dFixed
 from linear import DLRTLinearAdaptive
+from linear import DLRTLinearFixed
 
 
 class DLRTTrainer(nn.Module):
@@ -12,14 +14,19 @@ class DLRTTrainer(nn.Module):
     def __init__(
         self,
         torch_model: nn.Module,
-        rank,
         optimizer: torch.optim.Optimizer,
         loss_function,
+        rank_percent: float = None,
+        adaptive: bool = True,
         init_method="random",
     ):
+        if rank_percent > 1:
+            raise ValueError(
+                f"rank_percent should be less than 1, but got rank_percent={rank_percent}",
+            )
         super().__init__()
-
-        self.rank = rank
+        self.apaptive = adaptive
+        self.rank_percent = rank_percent
         self.init_method = init_method
         self.optimizer = optimizer
         self.loss_fn = loss_function
@@ -32,15 +39,44 @@ class DLRTTrainer(nn.Module):
         module_output = module
         # this will remove all the BatchNorm layers from the network
         if isinstance(module, nn.Linear):
-            module_output = DLRTLinearAdaptive(
-                in_features=module.in_features,
-                out_features=module.out_features,
-                bias=module.bias is not None,
-                device=module.weight.device,
-                dtype=module.weight.dtype,
-                # DLRT params
-                low_rank_percent=None,
-            )
+            model_kwargs = {
+                "in_features": module.in_features,
+                "out_features": module.out_features,
+                "bias": module.bias is not None,
+                "device": module.weight.device,
+                "dtype": module.weight.dtype,
+            }
+            if self.adaptive:
+                module_output = DLRTLinearAdaptive(
+                    **model_kwargs,
+                    low_rank_percent=self.rank_percent,
+                )
+            else:
+                module_output = DLRTLinearFixed(
+                    **model_kwargs,
+                    low_rank=int(self.rank_percent * module.in_features * module.out_features),
+                )
+        elif isinstance(module, nn.Conv2d):
+            model_kwargs = {
+                "in_channels": module.in_channels,
+                "out_channels": module.out_channels,
+                "kernel_size": module.kernel_size,
+                "stride": module.stride,
+                "padding": module.padding,
+                "dilation": module.dilation,
+                "groups": module.groups,
+                "bias": module.bias,
+                "padding_mode": module.padding_mode,
+                "device": module.device,
+                "dtype": module.dtype,
+            }
+            if self.adaptive:
+                module_output = DLRTConv2dAdaptive(
+                    **model_kwargs,
+                    low_rank_percent=self.rank_percent,
+                )
+            else:
+                module_output = DLRTConv2dFixed(**model_kwargs, low_rank_percent=self.rank_percent)
 
         for name, child in module.named_children():
             module_output.add_module(name, self.replace_linear_layers(child, process_group))
