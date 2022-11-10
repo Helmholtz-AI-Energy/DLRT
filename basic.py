@@ -5,11 +5,12 @@ import torch.nn as nn
 
 class DLRTModule(nn.Module):
     # parent class to abstract some methods
-    def __init__(self):
+    def __init__(self, fixed=False):
         super().__init__()
         self.train_case = None
         self.dlrt = True
         self.prev_case = "s"
+        self.fixed = fixed
 
     def kl_postpro_s_prepro(self):
         # to be overwritten
@@ -17,6 +18,10 @@ class DLRTModule(nn.Module):
 
     def kl_prepro(self):
         # to be overwritten
+        pass
+
+    def rank_adaption(self):
+        # to be overwritten (if needed in the not-fixed case)
         pass
 
     def change_training_case(self, case):
