@@ -148,7 +148,8 @@ class DLRTTrainer(nn.Module):
         self.set_layer_case("k")
         self.run_preproces(case="k")
         # for name, param in self.model.named_parameters():
-        #     print(name, param.requires_grad)
+        #     print(name, param.dtype)
+        # raise ValueError("")
         # TODO: autocast model with AMP
         kret = self.model(model_inputs)
         kloss = self.loss_fn(kret, labels)

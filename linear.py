@@ -187,6 +187,7 @@ class DLRTLinearFixed(DLRTModule):
     def l_preprocess(self):
         self.k.requires_grad = False
         self.s.requires_grad = False
+        self.bias.requires_grad = False
         # lt -> s @ aux_Vt
         self.lt = nn.Parameter(self.s @ self.vt, requires_grad=True)
 
@@ -280,6 +281,8 @@ class DLRTLinearAdaptive(DLRTModule):
             else:
                 self.rmax = int(np.floor(pos_coeff[-1]))
             # set the initial low_rank to be most of the rmax
+            if self.rmax < 10:
+                self.rmax = 20
             self.low_rank = self.rmax // 2
         else:
             self.rmax = min([in_features, out_features]) // 2

@@ -167,7 +167,7 @@ class _ConvNd(DLRTModule):
                 self.rmax = int(np.floor(pos_coeff[-1]))
             # set the initial low_rank to be most of the rmax
             if self.rmax < 10:
-                self.rmax = 10
+                self.rmax = 20
             self.low_rank = self.rmax // 2
             print("rmax: ", self.rmax, "low_rank: ", self.low_rank)
         else:
