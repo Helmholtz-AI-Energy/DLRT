@@ -12,41 +12,32 @@ class DLRTModule(nn.Module):
         self.dlrt = True
         self.prev_case = "s"
         self.fixed = fixed
+        self.basic_number_weights = None
 
-    def _k_preprocess(self):
+    def k_preprocess(self):
         ...
 
-    def _k_postprocess(self):
+    def k_postprocess(self):
         ...
 
-    def _l_preprocess(self):
+    def l_preprocess(self):
         ...
 
-    def _l_postprocess(self):
+    def l_postprocess(self):
         ...
 
-    def _s_preprocess(self):
+    def s_preprocess(self):
         ...
-
-    @torch.no_grad()
-    def kl_postpro_s_prepro(self):
-        # ------- k postpro ----------------------------------
-        self._k_postprocess()
-        # ------- l postpro ----------------------------------
-        self._l_postprocess()
-        # ------- s prepro ------------------------------------
-        # bias is trainable for the s step
-        self._s_preprocess()
-
-    @torch.no_grad()
-    def kl_prepro(self):
-        # disable bias training
-        self._k_preprocess()
-        self._l_preprocess()
 
     def rank_adaption(self):
         # to be overwritten (if needed in the not-fixed case)
         ...
+
+    def get_rank_percentage(self):
+        """
+        Get the percentage of ranks being used compared to the number of weights in a dense layer
+        """
+        return f"{self.low_rank / self.basic_number_weights:.5f}, {self.low_rank}"
 
     def change_training_case(self, case):
         # switch -> if current train case is k/l, do post for

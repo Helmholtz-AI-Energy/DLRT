@@ -59,6 +59,8 @@ class DLRTLinearFixed(DLRTModule):
         else:
             self.register_parameter("bias", None)
 
+        self.basic_number_weights = out_features * in_features
+
         self.dlrt = True
         self.init_method = init_method
         assert init_method in ["random", "svd"], "init_method must be in ['random', 'svd']"
@@ -108,17 +110,17 @@ class DLRTLinearFixed(DLRTModule):
         factory = {"device": self.k.device, "dtype": self.k.dtype}
         # u, vt, n, m, unp1, vtprev
 
-        self.u.set_(torch.linalg.qr(self.k)[0].to(**factory))
+        self.u = nn.Parameter(torch.linalg.qr(self.k)[0].to(**factory), requires_grad=False)
         # overwrite the old vars once there are new ones
         nn.init.kaiming_uniform_(self.unp1, a=math.sqrt(5))
         # aux_N -> aux_Unp1.T @ aux_U
         #   used in setting s,
-        self.n.set_(self.u.T @ self.unp1)
+        self.n = nn.Parameter(self.u.T @ self.unp1, requires_grad=False)
         # aux_Vtnp1 -> q from qr(lt.T)
-        self.vt.set_(torch.linalg.qr(self.lt.T)[0])
+        self.vt = nn.Parameter(torch.linalg.qr(self.lt.T)[0], requires_grad=False)
         nn.init.kaiming_uniform_(self.vtnp1, a=math.sqrt(5))
         # aux_M -> aux_Vtnp1 @ aux_Vt.T
-        self.m.set_(self.vt @ self.vtnp1.T)
+        self.m = nn.Parameter(self.vt @ self.vtnp1.T, requires_grad=False)
 
         self.u.requires_grad = False
         self.vt.requires_grad = False
@@ -173,44 +175,54 @@ class DLRTLinearFixed(DLRTModule):
         return ret if self.bias is None else ret + self.bias
 
     @torch.no_grad()
-    def _k_preprocess(self):
+    def k_preprocess(self):
+        self.lt.requires_grad = False
+        self.s.requires_grad = False
         self.bias.requires_grad = False
         # k prepro
         # k -> aux_U @ s
-        self.k.set_(self.u @ self.s)
+        self.k = nn.Parameter(self.u @ self.s, requires_grad=True)
 
     @torch.no_grad()
-    def _l_preprocess(self):
+    def l_preprocess(self):
+        self.k.requires_grad = False
+        self.s.requires_grad = False
         # lt -> s @ aux_Vt
-        self.lt.set_(self.s @ self.vt)
+        self.lt = nn.Parameter(self.s @ self.vt, requires_grad=True)
 
     @torch.no_grad()
-    def _k_postprocess(self):
+    def k_postprocess(self):
+        self.k.requires_grad = False
+        self.s.requires_grad = False
         # aux_Unp1 -> q from qr(k)
         #   aux_Unp1 used in s-step forward, can keep in u
-        self.u.set_(torch.linalg.qr(self.k)[0])
+        self.u = nn.Parameter(torch.linalg.qr(self.k)[0], requires_grad=False)
         self.u.requires_grad = False
         # aux_N -> aux_Unp1.T @ aux_U
         #   used in setting s,
-        self.n.set_(self.u.T @ self.unp1)
+        self.n = nn.Parameter(self.u.T @ self.unp1, requires_grad=False)
 
     @torch.no_grad()
-    def _l_postprocess(self):
+    def l_postprocess(self):
+        self.lt.requires_grad = False
+        self.s.requires_grad = False
         # aux_Vtnp1 -> q from qr(lt.T)
-        self.vt.set_(torch.linalg.qr(self.lt.T)[0])
+        self.vt = nn.Parameter(torch.linalg.qr(self.lt.T)[0], requires_grad=False)
         # aux_M -> aux_Vtnp1 @ aux_Vt.T
-        self.m.set_(self.vt @ self.vtnp1.T)
+        self.m = nn.Parameter(self.vt @ self.vtnp1.T, requires_grad=False)
         # overwrite the old vars once there is are new ones
-        self.unp1.set_(self.u.data)
-        self.vtnp1.set_(self.vt.data)
+        self.unp1 = nn.Parameter(self.u.data, requires_grad=False)
+        self.vtnp1 = nn.Parameter(self.vt.data, requires_grad=False)
 
     @torch.no_grad()
-    def _s_preprocess(self):
+    def s_preprocess(self):
+        self.k.requires_grad = False
+        self.lt.requires_grad = False
         self.bias.requires_grad = True
         # set aux_U -> aux_Unp1  # done above
         # set aux_Vt -> aux_Vtnp1  # done previously now
         # set s -> (aux_N @ s) @ aux_M.T
-        self.s.set_(self.n @ self.s @ self.m.T)
+        self.s = nn.Parameter(self.n @ self.s @ self.m.T, requires_grad=True)
 
 
 class DLRTLinearAdaptive(DLRTModule):
@@ -272,6 +284,9 @@ class DLRTLinearAdaptive(DLRTModule):
         else:
             self.rmax = min([in_features, out_features]) // 2
             self.low_rank = int(self.rmax * low_rank_percent)
+
+        self.basic_number_weights = out_features * in_features
+
         self.eps_adapt = eps_adapt
 
         # int(low_rank_percent * min([in_features, out_features]))
@@ -346,7 +361,9 @@ class DLRTLinearAdaptive(DLRTModule):
         self.n[: 2 * lr, :lr] = self.unp1[:, :lr2].T @ self.u[:, :lr]
         self.n.requires_grad = False
         # from l postpro ---------------------------------------------------
-        l_extended = torch.cat((self.lt[:lr].T, self.vt[:lr]), dim=1)
+        # print(self.lt[:lr].T.shape, self.vt[:lr].shape)
+        l_extended = torch.cat((self.lt[:lr].T, self.vt[:lr].T), dim=1)
+        # l_extended = torch.cat((self.lt[:lr], self.vt[:lr]), dim=1)
         aux_Vnp1, _ = torch.linalg.qr(l_extended)
         self.vtnp1[:lr2] = aux_Vnp1.T
         self.m[:lr2, :lr] = self.vtnp1[:lr2, :] @ self.vt[:lr].T
@@ -360,7 +377,7 @@ class DLRTLinearAdaptive(DLRTModule):
 
         rmax = self.rmax
         # update s
-        self.s.set_(torch.diag(sing[:rmax], **factory))
+        self.s.set_(torch.diag(sing[:rmax]).to(**factory))
 
         # create and update u and v
         self.u.set_(self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax])
@@ -433,24 +450,36 @@ class DLRTLinearAdaptive(DLRTModule):
         return ret if self.bias is None else ret + self.bias
 
     @torch.no_grad()
-    def _k_preprocess(self):
+    def k_preprocess(self):
+        self.k.requires_grad = False
+        self.lt.requires_grad = False
+        self.s.requires_grad = False
+
         self.bias.requires_grad = False
         # k prepro
         # k -> aux_U @ s
         kls = self.s[: self.low_rank, : self.low_rank]
         # self.k[:, : self.low_rank] = self.u[:, : self.low_rank] @ kls
-        self.k.set_(self.u[:, : self.low_rank] @ kls)
+        # self.k.set_(self.u[:, : self.low_rank] @ kls)
+        self.k = nn.Parameter(self.u[:, : self.low_rank] @ kls, requires_grad=True)
 
     @torch.no_grad()
-    def _l_preprocess(self):
+    def l_preprocess(self):
+        self.k.requires_grad = False
+        self.lt.requires_grad = False
+        self.s.requires_grad = False
         # lt -> s @ aux_Vt
         self.bias.requires_grad = False
         kls = self.s[: self.low_rank, : self.low_rank]
         # self.lt[: self.low_rank] = kls @ self.vt[: self.low_rank]
-        self.lt.set_(kls @ self.vt[: self.low_rank])
+        # self.lt.set_(kls @ self.vt[: self.low_rank])
+        self.lt = nn.Parameter(kls @ self.vt[: self.low_rank], requires_grad=True)
 
     @torch.no_grad()
-    def _k_postprocess(self):
+    def k_postprocess(self):
+        self.k.requires_grad = False
+        self.lt.requires_grad = False
+        self.s.requires_grad = False
         lr = self.low_rank
         lr2 = 2 * self.low_rank
         # ------- k postpro ----------------------------------
@@ -469,10 +498,13 @@ class DLRTLinearAdaptive(DLRTModule):
         self.n.requires_grad = False
 
     @torch.no_grad()
-    def _l_postprocess(self):
+    def l_postprocess(self):
+        self.k.requires_grad = False
+        self.lt.requires_grad = False
+        self.s.requires_grad = False
         lr = self.low_rank
         lr2 = 2 * self.low_rank
-        l_extended = torch.cat((self.lt[:lr].T, self.vt[:lr]), dim=1)
+        l_extended = torch.cat((self.lt[:lr].T, self.vt[:lr].T), dim=1)
         aux_Vnp1, _ = torch.linalg.qr(l_extended)
         self.vtnp1[:lr2] = aux_Vnp1.T
         m = self.vtnp1[:lr2, :] @ self.vt[:lr].T
@@ -481,13 +513,17 @@ class DLRTLinearAdaptive(DLRTModule):
         self.m.requires_grad = False
 
     @torch.no_grad()
-    def _s_preprocess(self):
+    def s_preprocess(self):
+        self.k.requires_grad = False
+        self.lt.requires_grad = False
+
         lr = self.low_rank
         lr2 = 2 * self.low_rank
         # bias is trainable for the s step
         self.bias.requires_grad = True
         # set s -> (aux_N @ s) @ aux_M.T
         self.s[:lr2, :lr2] = self.n[:lr2, :lr] @ self.s[:lr, :lr] @ self.m[:lr2, :lr].T
+        self.s.requires_grad = True
 
     @torch.no_grad()
     def rank_adaption(self):
@@ -508,14 +544,18 @@ class DLRTLinearAdaptive(DLRTModule):
                 break
 
         # rmax = max(min(rmax, self.rmax), 2)  # -> handled by the 2 in the for loop above
-
+        new_sz = int(rmax * 2)
         # update s
-        # self.s[:rmax, :rmax] = torch.diag(sing[:rmax], **factory)
-        self.s.set_(torch.diag(sing[:rmax]).to(device=self.s.device, dtype=self.s.dtype))
+        # self.s[:rmax, :rmax] = torch.diag(sing[:rmax]).to(device=self.s.device, dtype=self.s.dtype)
+        # self.s.set_(torch.diag(sing[:rmax]).to(device=self.s.device, dtype=self.s.dtype))
+        self.s = nn.Parameter(torch.diag(sing[:new_sz]).to(device=self.s.device, dtype=self.s.dtype))
 
         # update u and v
         # self.u[:, :rmax] = self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax]
         # self.vt[:rmax, :] = v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :]
-        self.u.set_(self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax])
-        self.vt.set_(v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :])
+
+        # self.u.set_(self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax])
+        self.u = nn.Parameter(self.unp1[:, : 2 * self.low_rank] @ u2[:, :new_sz], requires_grad=False)
+        # self.vt.set_(v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :])
+        self.vt = nn.Parameter(v2[:new_sz, :] @ self.vtnp1[: 2 * self.low_rank, :], requires_grad=False)
         self.low_rank = int(rmax)
