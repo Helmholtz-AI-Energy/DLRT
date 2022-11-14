@@ -3,10 +3,10 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from conv import DLRTConv2dAdaptive
-from conv import DLRTConv2dFixed
-from linear import DLRTLinearAdaptive
-from linear import DLRTLinearFixed
+from .conv import DLRTConv2dAdaptive
+from .conv import DLRTConv2dFixed
+from .linear import DLRTLinearAdaptive
+from .linear import DLRTLinearFixed
 
 
 __all__ = ["DLRTTrainer"]

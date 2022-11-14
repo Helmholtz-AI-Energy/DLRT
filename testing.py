@@ -6,7 +6,7 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from torchvision import datasets
 
-from trainer import DLRTTrainer
+from dlrt import DLRTTrainer
 
 
 def main():

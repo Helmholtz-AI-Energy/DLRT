@@ -1,0 +1,7 @@
+# local package
+
+coverage
+numpy
+# external requirements
+Sphinx
+torch
