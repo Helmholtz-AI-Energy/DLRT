@@ -7,9 +7,48 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from basic import DLRTModule
+from .basic import DLRTModule
 
-__all__ = ["DLRTLinearFixed", "DLRTLinearAdaptive"]
+__all__ = ["DLRTLinear", "DLRTLinearFixed", "DLRTLinearAdaptive"]
+
+
+def DLRTLinear(
+    in_features: int,
+    out_features: int,
+    adaptive: bool = True,
+    low_rank_percent: int = None,
+    bias: bool = True,
+    init_method: str = "random",
+    device=None,
+    dtype=None,
+    eps_adapt: float = 0.1,
+):
+    """
+    Gets a linear layer with the given features
+
+    Args:
+    """
+    if not adaptive:
+        lowrank = int(low_rank_percent * in_features * out_features) if low_rank_percent is not None else None
+        return DLRTLinearFixed(
+            in_features=in_features,
+            out_features=out_features,
+            bias=bias,
+            low_rank=lowrank,
+            init_method=init_method,
+            device=device,
+            dtype=dtype,
+        )
+    else:
+        return DLRTLinearAdaptive(
+            in_features=in_features,
+            out_features=out_features,
+            bias=bias,
+            low_rank_percent=low_rank_percent,
+            eps_adapt=eps_adapt,
+            device=device,
+            dtype=dtype,
+        )
 
 
 class DLRTLinearFixed(DLRTModule):
@@ -106,6 +145,9 @@ class DLRTLinearFixed(DLRTModule):
             f"in_features={self.in_features}, rank={self.low_rank}, "
             f"out_features={self.out_features}, bias={self.bias is not None}"
         )
+
+    def get_classic_weight_repr(self):
+        return self.k @ self.s @ self.lt
 
     @torch.no_grad()
     def set_aux_vars(self):
@@ -389,6 +431,9 @@ class DLRTLinearAdaptive(DLRTModule):
         self.vt.set_(v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :])
         # self.low_rank = int(rmax)
 
+    def get_classic_weight_repr(self):
+        return self.k @ self.s @ self.lt
+
     def reset_parameters(self) -> None:
         # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
         # uniform(-1/sqrt(in_features), 1/sqrt(in_features)). For details, see
@@ -534,6 +579,7 @@ class DLRTLinearAdaptive(DLRTModule):
     def rank_adaption(self):
         # 1) compute SVD of S
         # d=singular values, u2 = left singuar vecs, v2= right singular vecs
+        # TODO: 64 bit?
         s_small = self.s[: 2 * self.low_rank, : 2 * self.low_rank]
         u2, sing, vh2 = torch.linalg.svd(s_small, full_matrices=False)
         v2 = vh2.T

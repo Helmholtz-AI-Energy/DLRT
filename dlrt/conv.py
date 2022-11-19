@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import collections
 import math
-import warnings
 from itertools import repeat
 from typing import List
 from typing import Optional
@@ -16,10 +15,59 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.nn import common_types
 
-from basic import DLRTModule
+from .basic import DLRTModule
 
 
-__all__ = ["DLRTConv2dAdaptive", "DLRTConv2dFixed"]
+__all__ = ["DLRTConv2d", "DLRTConv2dAdaptive", "DLRTConv2dFixed"]
+
+
+def DLRTConv2d(
+    adaptive: bool,
+    in_channels: int,
+    out_channels: int,
+    kernel_size: common_types._size_2_t,
+    stride: common_types._size_2_t = 1,
+    padding: str | common_types._size_2_t = 0,
+    dilation: common_types._size_2_t = 1,
+    groups: int = 1,
+    bias: bool = True,
+    padding_mode: str = "zeros",
+    dtype=None,
+    device=None,
+    low_rank_percent=None,
+    eps_adapt: float = 0.1,
+):
+    if adaptive:
+        return DLRTConv2dAdaptive(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            bias,
+            padding_mode,
+            dtype,
+            device,
+            low_rank_percent,
+            eps_adapt,
+        )
+    else:
+        return DLRTConv2dFixed(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            bias,
+            padding_mode,
+            dtype,
+            device,
+            low_rank_percent,
+        )
 
 
 def _ntuple(n, name="parse"):

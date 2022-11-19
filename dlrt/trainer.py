@@ -3,10 +3,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from .conv import DLRTConv2dAdaptive
-from .conv import DLRTConv2dFixed
-from .linear import DLRTLinearAdaptive
-from .linear import DLRTLinearFixed
+from .conv import DLRTConv2d
+from .linear import DLRTLinear
 
 
 __all__ = ["DLRTTrainer"]
@@ -25,7 +23,15 @@ class DLRTTrainer(nn.Module):
         adaptive: bool = True,
         mixed_precision: bool = False,
         init_method="random",
+        epsilon=None,
     ):
+        if epsilon is None:
+            epsilon = {"linear": 0.1, "conv2d": 0.1}
+        elif not isinstance(epsilon, dict):
+            raise TypeError(
+                f"epsilon must be a dict with a value for every type of DLRT layer ('linear, "
+                f"conv2d', transformers), currently: {epsilon}",
+            )
         if "lr" not in optimizer_kwargs.keys():
             raise ValueError("LR must be included in optimizer_kwargs")
         if rank_percent and rank_percent > 1:
@@ -35,6 +41,7 @@ class DLRTTrainer(nn.Module):
         super().__init__()
         self.adaptive = adaptive
         self.rank_percent = rank_percent
+        self.epsilon = epsilon
         self.init_method = init_method
         self.loss_fn = loss_function
 
@@ -53,44 +60,30 @@ class DLRTTrainer(nn.Module):
         module_output = module
         # this will remove all the BatchNorm layers from the network
         if isinstance(module, nn.Linear):
-            model_kwargs = {
-                "in_features": module.in_features,
-                "out_features": module.out_features,
-                "bias": module.bias is not None,
-                # "device": module.weight.device,
-                # "dtype": module.weight.dtype,
-            }
-            if self.adaptive:
-                module_output = DLRTLinearAdaptive(
-                    **model_kwargs,
-                    low_rank_percent=self.rank_percent,
-                )
-            else:
-                module_output = DLRTLinearFixed(
-                    **model_kwargs,
-                    low_rank=int(self.rank_percent * module.in_features * module.out_features),
-                )
+            module_output = DLRTLinear(
+                in_features=module.in_features,
+                out_features=module.out_features,
+                bias=module.bias,
+                adaptive=self.adaptive,
+                low_rank_percent=self.rank_percent,
+                eps_adapt=self.epsilon["linear"],
+                # TODO: device checks??
+            )
         elif isinstance(module, nn.Conv2d):
-            model_kwargs = {
-                "in_channels": module.in_channels,
-                "out_channels": module.out_channels,
-                "kernel_size": module.kernel_size,
-                "stride": module.stride,
-                "padding": module.padding,
-                "dilation": module.dilation,
-                "groups": module.groups,
-                "bias": module.bias,
-                "padding_mode": module.padding_mode,
-                # "device": module.device,
-                # "dtype": module.dtype,
-            }
-            if self.adaptive:
-                module_output = DLRTConv2dAdaptive(
-                    **model_kwargs,
-                    low_rank_percent=self.rank_percent,
-                )
-            else:
-                module_output = DLRTConv2dFixed(**model_kwargs, low_rank_percent=self.rank_percent)
+            module_output = DLRTConv2d(
+                adaptive=self.adaptive,
+                low_rank_percent=self.rank_percent,
+                in_channels=module.in_channels,
+                out_channels=module.out_channels,
+                kernel_size=module.kernel_size,
+                stride=module.stride,
+                padding=module.padding,
+                dilation=module.dilation,
+                groups=module.groups,
+                bias=module.bias,
+                padding_mode=module.padding_mode,
+                eps_adapt=self.epsilon["conv2d"],
+            )
 
         for name, child in module.named_children():
             module_output.add_module(name, self.replace_linear_layers(child, process_group))
