@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import namedtuple
+
 import torch
 import torch.nn as nn
 
@@ -10,20 +12,21 @@ from .linear import DLRTLinear
 __all__ = ["DLRTTrainer"]
 
 
-class DLRTTrainer(nn.Module):
+class DLRTTrainer:
     # class which will wrap whole models
     def __init__(
         self,
         torch_model: nn.Module,
         optimizer_name: str,
         optimizer_kwargs: dict,
-        loss_function,
+        criterion,
         scheduler=None,  # TODO: implement
         rank_percent: float = None,
         adaptive: bool = True,
         mixed_precision: bool = False,
         init_method="random",
         epsilon=None,
+        init_ddp: bool = False,
     ):
         if epsilon is None:
             epsilon = {"linear": 0.1, "conv2d": 0.1}
@@ -43,11 +46,15 @@ class DLRTTrainer(nn.Module):
         self.rank_percent = rank_percent
         self.epsilon = epsilon
         self.init_method = init_method
-        self.loss_fn = loss_function
+        self.criterion = criterion
 
         # replace linear layers
         self.model = torch_model
         self.model = self.replace_linear_layers(self.model)
+
+        if init_ddp:
+            torch.nn.parallel.DistributedDataParallel(self.model)  # , device_ids=[args.gpu])
+
         self.ranks = []
         # need to re-init the optimizer with the new DLRT parameters
         optimizer_kwargs["params"] = self.model.parameters()
@@ -55,6 +62,7 @@ class DLRTTrainer(nn.Module):
         # todo: autocast
         self.scheduler = scheduler
         self.mixed_precision = mixed_precision
+        self.return_tuple = namedtuple("Trainer", ["loss", "output"])
 
     def replace_linear_layers(self, module, process_group=None):
         module_output = module
@@ -113,6 +121,12 @@ class DLRTTrainer(nn.Module):
     def run_rank_adaption(self):
         self.__run_command_on_dlrt_layers(module=self.model, command="rank_adaption")
 
+    def train(self):
+        self.model.train()
+
+    def eval(self):
+        self.model.eval()
+
     def __run_command_on_dlrt_layers(self, module, command, kwargs=None):
         if kwargs is None:
             kwargs = {}
@@ -148,7 +162,7 @@ class DLRTTrainer(nn.Module):
         # raise ValueError("")
         # TODO: autocast model with AMP
         kret = self.model(model_inputs)
-        kloss = self.loss_fn(kret, labels)
+        kloss = self.criterion(kret, labels)
         kloss.backward()
 
         # optimizer
@@ -161,7 +175,7 @@ class DLRTTrainer(nn.Module):
         self.set_layer_case("l")
         self.run_preproces(case="l")
         lret = self.model(model_inputs)
-        lloss = self.loss_fn(lret, labels)
+        lloss = self.criterion(lret, labels)
         lloss.backward()
         # optimizer
         self.optimizer.step()
@@ -173,7 +187,7 @@ class DLRTTrainer(nn.Module):
         self.set_layer_case("s")
         self.run_preproces(case="s")
         sret = self.model(model_inputs)
-        sloss = self.loss_fn(sret, labels)
+        sloss = self.criterion(sret, labels)
         sloss.backward()
 
         # optimizer
@@ -182,14 +196,14 @@ class DLRTTrainer(nn.Module):
         if self.adaptive:
             self.run_rank_adaption()
 
-        print(self.get_all_ranks())
+        # print(self.get_all_ranks())
 
-        return sloss
+        return self.return_tuple(sloss, sret)
 
     @torch.no_grad()
     def valid_step(self, model_inputs, labels):
         self.set_layer_case("s")
         self.run_preproces(case="s")
         sret = self.model(model_inputs)
-        ls = self.loss_fn(sret, labels)
+        ls = self.criterion(sret, labels)
         return ls, sret

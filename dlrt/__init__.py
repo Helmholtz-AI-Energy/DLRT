@@ -9,3 +9,4 @@ from .basic import *
 from .conv import *
 from .linear import *
 from .trainer import *
+from .transformer import *
