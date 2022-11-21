@@ -56,7 +56,14 @@ class DLRTTrainer:
         self.model = self.replace_linear_layers(self.model)
 
         if init_ddp:
-            torch.nn.parallel.DistributedDataParallel(self.model)  # , device_ids=[args.gpu])
+            # NOTE: every sync will be for S, K, and L right now. nothing else will be synced
+            self.model = torch.nn.parallel.DistributedDataParallel(self.model, find_unused_parameters=True)  # , device_ids=[args.gpu])
+            #if dist.is_initialized() and dist.get_rank() == 0:
+            #    c = 0
+            #    for name, param in self.model.named_parameters():
+            #        #if name == "conv1.l":
+            #            #k_test = param
+            #        print(name, param.requires_grad)
 
         self.ranks = []
         # need to re-init the optimizer with the new DLRT parameters
@@ -171,40 +178,41 @@ class DLRTTrainer:
         #        #    break
         # raise ValueError("")
         # TODO: autocast model with AMP
-        kret = self.model(model_inputs)
-        kloss = self.criterion(kret, labels)
-        t1 = time.perf_counter()
-        kloss.backward()
+        with self.model.no_sync():
+            kret = self.model(model_inputs)
+            kloss = self.criterion(kret, labels)
+            t1 = time.perf_counter()
+            kloss.backward()
 
-        # optimizer
-        self.optimizer.step()
-        #if dist.get_rank() == 0:
-        #    print(f"K-backwards time: {time.perf_counter() - t1}")
-        #    #if dist.is_initialized() and dist.get_rank() == 0:
-        #    #c = 0
-        #    for name, param in self.model.named_parameters():
-        #        if name == "conv1.l":
-        #            print("L test (should ALWAYS be true)", torch.equal(k_test, param))
-        #            #print(name, param[..., :10])
-        self.optimizer.zero_grad()
+            # optimizer
+            self.optimizer.step()
+            #if dist.get_rank() == 0:
+            #    print(f"K-backwards time: {time.perf_counter() - t1}")
+            #    #if dist.is_initialized() and dist.get_rank() == 0:
+            #    #c = 0
+            #    for name, param in self.model.named_parameters():
+            #        if name == "conv1.l":
+            #            print("L test (should ALWAYS be true)", torch.equal(k_test, param))
+            #            #print(name, param[..., :10])
+            self.optimizer.zero_grad()
 
-        self.run_postproces(case="k")
+            self.run_postproces(case="k")
 
-        # L
-        self.set_layer_case("l")
-        self.run_preproces(case="l")
-        lret = self.model(model_inputs)
-        lloss = self.criterion(lret, labels)
-        t2 = time.perf_counter()
-        lloss.backward()
-        # optimizer
-        self.optimizer.step()
-        #if dist.get_rank() == 0:
-        #    print(f"L-backwards time: {time.perf_counter() - t2}")
+            # L
+            self.set_layer_case("l")
+            self.run_preproces(case="l")
+            lret = self.model(model_inputs)
+            lloss = self.criterion(lret, labels)
+            t2 = time.perf_counter()
+            lloss.backward()
+            # optimizer
+            self.optimizer.step()
+            #if dist.get_rank() == 0:
+            #    print(f"L-backwards time: {time.perf_counter() - t2}")
 
-        self.optimizer.zero_grad()
+            self.optimizer.zero_grad()
 
-        self.run_postproces(case="l")
+            self.run_postproces(case="l")
 
         # S
         self.set_layer_case("s")
