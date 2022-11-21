@@ -19,10 +19,10 @@ import torch.utils.data.distributed
 import torchvision.datasets as datasets
 import torchvision.models as models
 import torchvision.transforms as transforms
+from PIL import ImageFile
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
 
-from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 import dlrt
@@ -178,7 +178,7 @@ def main():
         torch.manual_seed(args.seed)
 
     # initialize the torch process group across all processes
-    print('comm init')
+    print("comm init")
     comm.init(method="nccl-slurm")
 
     # create model
@@ -209,7 +209,7 @@ def main():
     #     momentum=args.momentum,
     #     weight_decay=args.weight_decay
     # )
-    print('converting model to DLRT')
+    print("converting model to DLRT")
     dlrt_trainer = dlrt.DLRTTrainer(
         torch_model=model,
         optimizer_name="SGD",
@@ -324,7 +324,7 @@ def main():
         train(train_loader, dlrt_trainer, epoch, device, args)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, dlrt_trainer, args)
+        _ = validate(val_loader, dlrt_trainer, args)
 
         scheduler.step()
 
@@ -369,7 +369,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
-        output = trainer.train_step(images, target, adapt=epoch > 0)
+        output = trainer.train_step(images, target, adapt=epoch >= 0)
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output.output, target, topk=(1, 5))
@@ -380,7 +380,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-        #if i == 2:
+        # if i == 2:
         #    break
 
         if i % args.print_freq == 0 and rank == 0:
@@ -410,7 +410,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
                 batch_time.update(time.time() - end)
                 end = time.time()
 
-         #       break
+                #       break
 
                 if i % args.print_freq == 0 and rank == 0:
                     progress.display(i + 1)
@@ -420,8 +420,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
     top1 = AverageMeter("Acc@1", ":6.2f", Summary.AVERAGE)
     top5 = AverageMeter("Acc@5", ":6.2f", Summary.AVERAGE)
     progress = ProgressMeter(
-        len(val_loader)
-        + ((len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        len(val_loader) + (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)),
         [batch_time, losses, top1, top5],
         prefix="Test: ",
     )

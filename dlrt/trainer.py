@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+import time
 from collections import namedtuple
 
 import torch
-import torch.nn as nn
 import torch.distributed as dist
+import torch.nn as nn
 
 from .conv import DLRTConv2d
 from .linear import DLRTLinear
-
-import time
 
 
 __all__ = ["DLRTTrainer"]
@@ -26,7 +25,7 @@ class DLRTTrainer:
         scheduler=None,  # TODO: implement
         rank_percent: float = None,
         adaptive: bool = True,
-        mixed_precision: bool = False,
+        mixed_precision: bool = True,
         init_method="random",
         epsilon=None,
         init_ddp: bool = False,
@@ -57,8 +56,11 @@ class DLRTTrainer:
 
         if init_ddp:
             # NOTE: every sync will be for S, K, and L right now. nothing else will be synced
-            self.model = torch.nn.parallel.DistributedDataParallel(self.model, find_unused_parameters=True)  # , device_ids=[args.gpu])
-            #if dist.is_initialized() and dist.get_rank() == 0:
+            self.model = torch.nn.parallel.DistributedDataParallel(
+                self.model,
+                find_unused_parameters=True,
+            )  # , device_ids=[args.gpu])
+            # if dist.is_initialized() and dist.get_rank() == 0:
             #    c = 0
             #    for name, param in self.model.named_parameters():
             #        #if name == "conv1.l":
@@ -72,7 +74,14 @@ class DLRTTrainer:
         # todo: autocast
         self.scheduler = scheduler
         self.mixed_precision = mixed_precision
+        if mixed_precision:
+            # TODO: should there be different scalers for different parameters?
+            #       i.e. -> one for k, onr for s, one for l
+            self.scaler = torch.cuda.amp.GradScaler()
+        else:
+            self.scaler = None
         self.return_tuple = namedtuple("Trainer", ["loss", "output"])
+        self.counter = 0
 
     def replace_linear_layers(self, module, process_group=None):
         module_output = module
@@ -161,54 +170,45 @@ class DLRTTrainer:
         self.ranks = []
         return out_ranks
 
+    def _run_model(self, inputs, labels):
+        if self.mixed_precision:
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                ret = self.model(inputs)
+                loss = self.criterion(ret, labels)
+        else:
+            ret = self.model(inputs)
+            loss = self.criterion(ret, labels)
+        return loss, ret
+
     def train_step(self, model_inputs, labels, adapt=True):
         self.optimizer.zero_grad()
 
         # K
         self.set_layer_case("k")
         self.run_preproces(case="k")
-        #if dist.is_initialized() and dist.get_rank() == 0:
-        #    c = 0
-        #    for name, param in self.model.named_parameters():
-        #        if name == "conv1.l":
-        #            k_test = param
-        #            #print(name, param[..., :10])
-        #        #c += 1
-        #        #if c == 10:
-        #        #    break
-        # raise ValueError("")
         # TODO: autocast model with AMP
         with self.model.no_sync():
-            kret = self.model(model_inputs)
-            kloss = self.criterion(kret, labels)
-            t1 = time.perf_counter()
-            kloss.backward()
-
+            kloss, kret = self._run_model(model_inputs, labels)
+            if self.scaler is not None:
+                self.scaler.scale(kloss).backward()
+            else:
+                kloss.backward()
             # optimizer
             self.optimizer.step()
-            #if dist.get_rank() == 0:
-            #    print(f"K-backwards time: {time.perf_counter() - t1}")
-            #    #if dist.is_initialized() and dist.get_rank() == 0:
-            #    #c = 0
-            #    for name, param in self.model.named_parameters():
-            #        if name == "conv1.l":
-            #            print("L test (should ALWAYS be true)", torch.equal(k_test, param))
-            #            #print(name, param[..., :10])
-            self.optimizer.zero_grad()
 
+            self.optimizer.zero_grad()
             self.run_postproces(case="k")
 
             # L
             self.set_layer_case("l")
             self.run_preproces(case="l")
-            lret = self.model(model_inputs)
-            lloss = self.criterion(lret, labels)
-            t2 = time.perf_counter()
-            lloss.backward()
+            lloss, lret = self._run_model(model_inputs, labels)
+            if self.scaler is not None:
+                self.scaler.scale(lloss).backward()
+            else:
+                lloss.backward()
             # optimizer
             self.optimizer.step()
-            #if dist.get_rank() == 0:
-            #    print(f"L-backwards time: {time.perf_counter() - t2}")
 
             self.optimizer.zero_grad()
 
@@ -217,22 +217,27 @@ class DLRTTrainer:
         # S
         self.set_layer_case("s")
         self.run_preproces(case="s")
-        sret = self.model(model_inputs)
-        sloss = self.criterion(sret, labels)
-        t3 = time.perf_counter()
-        sloss.backward()
+        sloss, sret = self._run_model(model_inputs, labels)
+        if self.scaler is not None:
+            self.scaler.scale(sloss).backward()
+        else:
+            sloss.backward()
+        # sret = self.model(model_inputs)
+        # sloss = self.criterion(sret, labels)
+        # sloss.backward()
 
         # optimizer
         self.optimizer.step()
-        #if dist.get_rank() == 0:
+        # if dist.get_rank() == 0:
         #    print(f"S-backwards time: {time.perf_counter() - t3}")
 
         # todo: set up scheduler
         if self.adaptive and adapt:
             self.run_rank_adaption()
 
-        #if dist.get_rank() == 0:
-        #    print(self.get_all_ranks())
+        if dist.get_rank() == 0 and self.counter % 100 == 0:
+            print(self.get_all_ranks())
+        self.counter += 1
 
         return self.return_tuple(sloss, sret)
 
