@@ -22,6 +22,9 @@ import torchvision.transforms as transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
 
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 import dlrt
 
 
@@ -33,7 +36,7 @@ model_names = sorted(
 
 parser = argparse.ArgumentParser(description="PyTorch ImageNet Training")
 parser.add_argument(
-    "data",
+    "--data",
     metavar="DIR",
     nargs="?",
     default="imagenet",
@@ -175,6 +178,7 @@ def main():
         torch.manual_seed(args.seed)
 
     # initialize the torch process group across all processes
+    print('comm init')
     comm.init(method="nccl-slurm")
 
     # create model
@@ -205,7 +209,7 @@ def main():
     #     momentum=args.momentum,
     #     weight_decay=args.weight_decay
     # )
-
+    print('converting model to DLRT')
     dlrt_trainer = dlrt.DLRTTrainer(
         torch_model=model,
         optimizer_name="SGD",
@@ -215,7 +219,8 @@ def main():
             "weight_decay": args.weight_decay,
         },
         adaptive=True,
-        loss_function=nn.CrossEntropyLoss().to(device),
+        criterion=nn.CrossEntropyLoss().to(device),
+        init_ddp=True,
     )
     print(dlrt_trainer)
 
@@ -316,16 +321,16 @@ def main():
         train_sampler.set_epoch(epoch)
 
         # train for one epoch
-        train(train_loader, model, dlrt_trainer, epoch, device, args)
+        train(train_loader, dlrt_trainer, epoch, device, args)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, dlrt_trainer.criterion, args)
+        acc1 = validate(val_loader, dlrt_trainer, args)
 
         scheduler.step()
 
         # remember best acc@1 and save checkpoint
         # is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
+        # best_acc1 = max(acc1, best_acc1)
 
         # if not args.multiprocessing_distributed or args.rank % 4 == 0:
         #     save_checkpoint(
@@ -364,7 +369,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
-        output = trainer.train_step(images, target)
+        output = trainer.train_step(images, target, adapt=epoch > 0)
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output.output, target, topk=(1, 5))
@@ -375,6 +380,8 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
+        #if i == 2:
+        #    break
 
         if i % args.print_freq == 0 and rank == 0:
             progress.display(i + 1)
@@ -403,6 +410,8 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
                 batch_time.update(time.time() - end)
                 end = time.time()
 
+         #       break
+
                 if i % args.print_freq == 0 and rank == 0:
                     progress.display(i + 1)
 
@@ -412,7 +421,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
     top5 = AverageMeter("Acc@5", ":6.2f", Summary.AVERAGE)
     progress = ProgressMeter(
         len(val_loader)
-        + (args.distributed and (len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
+        + ((len(val_loader.sampler) * args.world_size < len(val_loader.dataset))),
         [batch_time, losses, top1, top5],
         prefix="Test: ",
     )
@@ -445,7 +454,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
     top5.all_reduce()
 
     if dist.get_rank() == 0:
-        print(f"End of epoch, validation top1: {top1:.5f}\ttop5: {top5:.5f}")
+        print(f"End of epoch, validation top1: {top1}\ttop5: {top5}")
 
     return top1.avg
 

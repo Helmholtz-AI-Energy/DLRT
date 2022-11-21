@@ -794,7 +794,12 @@ class DLRTConv2dAdaptive(_ConvNd):
         # print("running rank_adaption")
         rnk = self.low_rank
         s_small = self.s_hat[: 2 * rnk, : 2 * rnk]
-        u2, d, v2 = torch.linalg.svd(s_small)
+        try:
+            u2, d, v2 = torch.linalg.svd(s_small)
+        except torch._C._LinAlgError as e:
+            print(f"Error in SVD: {e}")
+            return
+
 
         # tol = self.theta * torch.linalg.norm(d)  # if not self.absolute else self.theta
         tol = self.eps_adapt * torch.linalg.norm(d)

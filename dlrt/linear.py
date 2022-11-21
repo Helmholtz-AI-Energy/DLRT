@@ -95,7 +95,7 @@ class DLRTLinearFixed(DLRTModule):
 
         self.in_features = in_features
         self.out_features = out_features
-        if bias:
+        if (isinstance(bias, bool) and bias) or bias is not None:
             self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
         else:
             self.register_parameter("bias", None)
@@ -311,7 +311,7 @@ class DLRTLinearAdaptive(DLRTModule):
         factory_kwargs = {"device": device, "dtype": dtype}
         self.in_features = in_features
         self.out_features = out_features
-        if bias:
+        if (isinstance(bias, bool) and bias) or bias is not None:
             self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
         else:
             self.register_parameter("bias", None)
@@ -581,7 +581,11 @@ class DLRTLinearAdaptive(DLRTModule):
         # d=singular values, u2 = left singuar vecs, v2= right singular vecs
         # TODO: 64 bit?
         s_small = self.s[: 2 * self.low_rank, : 2 * self.low_rank]
-        u2, sing, vh2 = torch.linalg.svd(s_small, full_matrices=False)
+        try:
+            u2, sing, vh2 = torch.linalg.svd(s_small, full_matrices=False, driver="gesvdj")
+        except torch._C._LinAlgError as e:
+            print(f"LinAlgError during SGD -> {e}")
+            return
         v2 = vh2.T
         # d, u2, v2 = tf.linalg.svd(s_small)
 

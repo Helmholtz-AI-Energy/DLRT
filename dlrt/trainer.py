@@ -4,9 +4,12 @@ from collections import namedtuple
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 
 from .conv import DLRTConv2d
 from .linear import DLRTLinear
+
+import time
 
 
 __all__ = ["DLRTTrainer"]
@@ -76,7 +79,7 @@ class DLRTTrainer:
                 low_rank_percent=self.rank_percent,
                 eps_adapt=self.epsilon["linear"],
                 # TODO: device checks??
-            )
+            ).to(device=module.weight.device, dtype=module.weight.dtype)
         elif isinstance(module, nn.Conv2d):
             module_output = DLRTConv2d(
                 adaptive=self.adaptive,
@@ -91,7 +94,7 @@ class DLRTTrainer:
                 bias=module.bias,
                 padding_mode=module.padding_mode,
                 eps_adapt=self.epsilon["conv2d"],
-            )
+            ).to(device=module.weight.device, dtype=module.weight.dtype)
 
         for name, child in module.named_children():
             module_output.add_module(name, self.replace_linear_layers(child, process_group))
@@ -151,22 +154,38 @@ class DLRTTrainer:
         self.ranks = []
         return out_ranks
 
-    def train_step(self, model_inputs, labels):
+    def train_step(self, model_inputs, labels, adapt=True):
         self.optimizer.zero_grad()
 
         # K
         self.set_layer_case("k")
         self.run_preproces(case="k")
-        # for name, param in self.model.named_parameters():
-        #     print(name, param.dtype)
+        #if dist.is_initialized() and dist.get_rank() == 0:
+        #    c = 0
+        #    for name, param in self.model.named_parameters():
+        #        if name == "conv1.l":
+        #            k_test = param
+        #            #print(name, param[..., :10])
+        #        #c += 1
+        #        #if c == 10:
+        #        #    break
         # raise ValueError("")
         # TODO: autocast model with AMP
         kret = self.model(model_inputs)
         kloss = self.criterion(kret, labels)
+        t1 = time.perf_counter()
         kloss.backward()
 
         # optimizer
         self.optimizer.step()
+        #if dist.get_rank() == 0:
+        #    print(f"K-backwards time: {time.perf_counter() - t1}")
+        #    #if dist.is_initialized() and dist.get_rank() == 0:
+        #    #c = 0
+        #    for name, param in self.model.named_parameters():
+        #        if name == "conv1.l":
+        #            print("L test (should ALWAYS be true)", torch.equal(k_test, param))
+        #            #print(name, param[..., :10])
         self.optimizer.zero_grad()
 
         self.run_postproces(case="k")
@@ -176,9 +195,13 @@ class DLRTTrainer:
         self.run_preproces(case="l")
         lret = self.model(model_inputs)
         lloss = self.criterion(lret, labels)
+        t2 = time.perf_counter()
         lloss.backward()
         # optimizer
         self.optimizer.step()
+        #if dist.get_rank() == 0:
+        #    print(f"L-backwards time: {time.perf_counter() - t2}")
+
         self.optimizer.zero_grad()
 
         self.run_postproces(case="l")
@@ -188,15 +211,20 @@ class DLRTTrainer:
         self.run_preproces(case="s")
         sret = self.model(model_inputs)
         sloss = self.criterion(sret, labels)
+        t3 = time.perf_counter()
         sloss.backward()
 
         # optimizer
         self.optimizer.step()
+        #if dist.get_rank() == 0:
+        #    print(f"S-backwards time: {time.perf_counter() - t3}")
+
         # todo: set up scheduler
-        if self.adaptive:
+        if self.adaptive and adapt:
             self.run_rank_adaption()
 
-        # print(self.get_all_ranks())
+        #if dist.get_rank() == 0:
+        #    print(self.get_all_ranks())
 
         return self.return_tuple(sloss, sret)
 
@@ -206,4 +234,4 @@ class DLRTTrainer:
         self.run_preproces(case="s")
         sret = self.model(model_inputs)
         ls = self.criterion(sret, labels)
-        return ls, sret
+        return self.return_tuple(ls, sret)
