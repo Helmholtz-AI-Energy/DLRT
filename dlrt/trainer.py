@@ -52,23 +52,23 @@ class DLRTTrainer:
 
         # replace linear layers
         self.model = torch_model
-        self.last_layer = list(torch_model.children())[-1]
+        self.reset_layers = None
         self.model = self.replace_linear_layers(self.model)
-        self.model = nn.Sequential(nn.Sequential(list(self.model.children())[:-1]), self.last_layer)
+        self.model = self._reset_last_layer_to_dense(self.model)
         if init_ddp:
             # NOTE: every sync will be for S, K, and L right now. nothing else will be synced
             self.model = torch.nn.parallel.DistributedDataParallel(
                 self.model,
                 find_unused_parameters=True,
             )  # , device_ids=[args.gpu])
+
             # if dist.is_initialized() and dist.get_rank() == 0:
             #    c = 0
             #    for name, param in self.model.named_parameters():
             #        #if name == "conv1.l":
             #            #k_test = param
             #        print(name, param.requires_grad)
-
-        self. = []
+        self.rank = 0 if not dist.is_initialized() else dist.get_rank()
         # need to re-init the optimizer with the new DLRT parameters
         optimizer_kwargs["params"] = self.model.parameters()
         self.optimizer = getattr(torch.optim, optimizer_name)(**optimizer_kwargs)
@@ -84,7 +84,7 @@ class DLRTTrainer:
         self.return_tuple = namedtuple("Trainer", ["loss", "output"])
         self.counter = 0
 
-    def replace_linear_layers(self, module, process_group=None):
+    def replace_linear_layers(self, module, name=None, process_group=None):
         module_output = module
         # this will remove all the BatchNorm layers from the network
         if isinstance(module, nn.Linear):
@@ -97,6 +97,7 @@ class DLRTTrainer:
                 eps_adapt=self.epsilon["linear"],
                 # TODO: device checks??
             ).to(device=module.weight.device, dtype=module.weight.dtype)
+            self.reset_layers = [module, name]
         elif isinstance(module, nn.Conv2d):
             module_output = DLRTConv2d(
                 adaptive=self.adaptive,
@@ -112,9 +113,26 @@ class DLRTTrainer:
                 padding_mode=module.padding_mode,
                 eps_adapt=self.epsilon["conv2d"],
             ).to(device=module.weight.device, dtype=module.weight.dtype)
+            self.reset_layers = [module, name]
 
         for name, child in module.named_children():
-            module_output.add_module(name, self.replace_linear_layers(child, process_group))
+            module_output.add_module(name, self.replace_linear_layers(child, name, process_group))
+        del module
+        return module_output
+
+    def _reset_last_layer_to_dense(self, module, name=None):
+        module_output = module
+        # this will remove all the BatchNorm layers from the network
+        if name == self.reset_layers[1]:
+            if hasattr(module, "weight"):
+                device = module.weight.device
+                dtype = module.weight.dtype
+            else:
+                device = module.k.device
+                dtype = module.k.dtype
+            module_output = self.reset_layers[0].to(device=device, dtype=dtype)
+        for name, child in module.named_children():
+            module_output.add_module(name, self._reset_last_layer_to_dense(child, name))
         del module
         return module_output
 
@@ -188,7 +206,7 @@ class DLRTTrainer:
         self.set_layer_case("k")
         self.run_preproces(case="k")
         # TODO: autocast model with AMP
-        #with self.model.no_sync():
+        # with self.model.no_sync():
         kloss, kret = self._run_model(model_inputs, labels)
         if self.scaler is not None:
             self.scaler.scale(kloss).backward()
@@ -214,7 +232,7 @@ class DLRTTrainer:
         self.optimizer.zero_grad()
 
         self.run_postproces(case="l")
-        # end of no_sync 
+        # end of no_sync
 
         # S
         self.set_layer_case("s")
@@ -235,11 +253,10 @@ class DLRTTrainer:
 
         # todo: set up scheduler
         if self.adaptive and adapt:
-            #print(self.counter)
             self.run_rank_adaption()
 
-            #if dist.get_rank() == 0:# and self.counter % 100 == 0:
-            #    print(self.get_all_ranks())
+            if self.rank == 0 and self.counter % 100 == 0:
+                print(self.get_all_ranks())
         self.counter += 1
 
         return self.return_tuple(sloss, sret)
