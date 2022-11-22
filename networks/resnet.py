@@ -46,7 +46,7 @@ parser.add_argument(
     "-a",
     "--arch",
     metavar="ARCH",
-    default="resnet18",
+    default="resnet50",
     choices=model_names,
     help="model architecture: " + " | ".join(model_names) + " (default: resnet18)",
 )
@@ -179,7 +179,7 @@ def main():
 
     # initialize the torch process group across all processes
     print("comm init")
-    comm.init(method="nccl-slurm")
+    #comm.init(method="nccl-slurm")
 
     # create model
     if args.pretrained:
@@ -192,7 +192,7 @@ def main():
     # For multiprocessing distributed, DistributedDataParallel constructor
     # should always set the single device scope, otherwise,
     # DistributedDataParallel will use all available devices.
-    args.gpu = dist.get_rank() % 4  # only 4 gpus/node
+    args.gpu = 0  # dist.get_rank() % torch.cuda.device_count()  # only 4 gpus/node
     torch.cuda.set_device(args.gpu)
     model.cuda(args.gpu)
     # When using a single GPU per process and per
@@ -209,7 +209,7 @@ def main():
     #     momentum=args.momentum,
     #     weight_decay=args.weight_decay
     # )
-    print("converting model to DLRT")
+    # print("converting model to DLRT")
     dlrt_trainer = dlrt.DLRTTrainer(
         torch_model=model,
         optimizer_name="SGD",
@@ -220,9 +220,10 @@ def main():
         },
         adaptive=True,
         criterion=nn.CrossEntropyLoss().to(device),
-        init_ddp=True,
+        init_ddp=False, # True,
+        mixed_precision=False,
     )
-    print(dlrt_trainer)
+    # print(dlrt_trainer)
 
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     scheduler = StepLR(dlrt_trainer.optimizer, step_size=30, gamma=0.1)
@@ -289,7 +290,7 @@ def main():
             ),
         )
 
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    train_sampler = None #torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -299,11 +300,11 @@ def main():
         sampler=train_sampler,
     )
 
-    val_sampler = torch.utils.data.distributed.DistributedSampler(
-        val_dataset,
-        shuffle=False,
-        drop_last=True,
-    )
+    val_sampler = None#, torch.utils.data.distributed.DistributedSampler(
+        #val_dataset,
+        #shuffle=False,
+        #drop_last=True,
+    #)
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=args.batch_size,
@@ -318,7 +319,7 @@ def main():
         return
 
     for epoch in range(args.start_epoch, args.epochs):
-        train_sampler.set_epoch(epoch)
+        #train_sampler.set_epoch(epoch)
 
         # train for one epoch
         train(train_loader, dlrt_trainer, epoch, device, args)
@@ -359,7 +360,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
 
     # switch to train mode
     trainer.train()
-    rank = dist.get_rank()
+    #rank = dist.get_rank()
     end = time.time()
     for i, (images, target) in enumerate(train_loader):
         # measure data loading time
@@ -369,7 +370,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
-        output = trainer.train_step(images, target, adapt=epoch >= 0)
+        output = trainer.train_step(images, target, adapt=(epoch > 0) or (i > 100))
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output.output, target, topk=(1, 5))
@@ -383,13 +384,13 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         # if i == 2:
         #    break
 
-        if i % args.print_freq == 0 and rank == 0:
+        if i % args.print_freq == 0:# and rank == 0:
             progress.display(i + 1)
 
 
 def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
     def run_validate(loader, base_progress=0):
-        rank = dist.get_rank()
+        #rank = dist.get_rank()
         with torch.no_grad():
             end = time.time()
             for i, (images, target) in enumerate(loader):
@@ -412,7 +413,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
 
                 #       break
 
-                if i % args.print_freq == 0 and rank == 0:
+                if i % args.print_freq == 0:# and rank == 0:
                     progress.display(i + 1)
 
     batch_time = AverageMeter("Time", ":6.3f", Summary.NONE)
@@ -452,8 +453,8 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
     top1.all_reduce()
     top5.all_reduce()
 
-    if dist.get_rank() == 0:
-        print(f"End of epoch, validation top1: {top1}\ttop5: {top5}")
+    #if dist.get_rank() == 0:
+    #    print(f"End of epoch, validation top1: {top1}\ttop5: {top5}")
 
     return top1.avg
 
@@ -529,19 +530,19 @@ class ProgressMeter:
         self.batch_fmtstr = self._get_batch_fmtstr(num_batches)
         self.meters = meters
         self.prefix = prefix
-        self.rank = dist.get_rank()
+        #self.rank = dist.get_rank()
 
     def display(self, batch):
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
-        if self.rank == 0:
-            print("\t".join(entries))
+        #if self.rank == 0:
+        print("\t".join(entries))
 
     def display_summary(self):
         entries = [" *"]
         entries += [meter.summary() for meter in self.meters]
-        if self.rank == 0:
-            print(" ".join(entries))
+        #if self.rank == 0:
+        print(" ".join(entries))
 
     def _get_batch_fmtstr(self, num_batches):
         num_digits = len(str(num_batches // 1))

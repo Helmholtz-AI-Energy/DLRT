@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # Slurm job configuration
-#SBATCH --nodes=2
-#SBATCH --ntasks-per-node=4
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
 ### #SBATCH --gpus-per-task=1
 #SBATCH --time=01:00:00
 #SBATCH --job-name=dlrt-ddp
@@ -16,7 +16,7 @@ ml purge
 # pmi2 cray_shasta
 SRUN_PARAMS=(
   --mpi="pmi2"
-  --ntasks-per-node=4
+  #--ntasks-per-node=1
   --gpus-per-task=1
   --cpus-per-task="19"
   #--cpu-bind="ldoms"
@@ -66,4 +66,4 @@ echo "srun ${SRUN_PARAMS[@]} singularity exec --nv \
 
 srun "${SRUN_PARAMS[@]}" singularity exec --nv \
   --bind "${DATA_PREFIX}","${SCRIPT_DIR}","/scratch","/tmp","/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/dlrt/":"/opt/conda/lib/python3.8/site-packages/dlrt/" "${SINGULARITY_FILE}" \
-    bash -c "python -u resnet.py --data=${DATA_PREFIX} --world-size=${SLURM_NTASKS} -b 1024 -p 1"
+    bash -c "python -u resnet.py --data=${DATA_PREFIX} --world-size=${SLURM_NTASKS} -b 256 -p 100 --lr 0.05 --momentum 0.1 --wd 0."

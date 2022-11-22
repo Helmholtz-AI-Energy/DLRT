@@ -52,8 +52,9 @@ class DLRTTrainer:
 
         # replace linear layers
         self.model = torch_model
+        self.last_layer = list(torch_model.children())[-1]
         self.model = self.replace_linear_layers(self.model)
-
+        self.model = nn.Sequential(nn.Sequential(list(self.model.children())[:-1]), self.last_layer)
         if init_ddp:
             # NOTE: every sync will be for S, K, and L right now. nothing else will be synced
             self.model = torch.nn.parallel.DistributedDataParallel(
@@ -67,7 +68,7 @@ class DLRTTrainer:
             #            #k_test = param
             #        print(name, param.requires_grad)
 
-        self.ranks = []
+        self. = []
         # need to re-init the optimizer with the new DLRT parameters
         optimizer_kwargs["params"] = self.model.parameters()
         self.optimizer = getattr(torch.optim, optimizer_name)(**optimizer_kwargs)
@@ -172,7 +173,7 @@ class DLRTTrainer:
 
     def _run_model(self, inputs, labels):
         if self.mixed_precision:
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
                 ret = self.model(inputs)
                 loss = self.criterion(ret, labels)
         else:
@@ -187,32 +188,33 @@ class DLRTTrainer:
         self.set_layer_case("k")
         self.run_preproces(case="k")
         # TODO: autocast model with AMP
-        with self.model.no_sync():
-            kloss, kret = self._run_model(model_inputs, labels)
-            if self.scaler is not None:
-                self.scaler.scale(kloss).backward()
-            else:
-                kloss.backward()
-            # optimizer
-            self.optimizer.step()
+        #with self.model.no_sync():
+        kloss, kret = self._run_model(model_inputs, labels)
+        if self.scaler is not None:
+            self.scaler.scale(kloss).backward()
+        else:
+            kloss.backward()
+        # optimizer
+        self.optimizer.step()
 
-            self.optimizer.zero_grad()
-            self.run_postproces(case="k")
+        self.optimizer.zero_grad()
+        self.run_postproces(case="k")
 
-            # L
-            self.set_layer_case("l")
-            self.run_preproces(case="l")
-            lloss, lret = self._run_model(model_inputs, labels)
-            if self.scaler is not None:
-                self.scaler.scale(lloss).backward()
-            else:
-                lloss.backward()
-            # optimizer
-            self.optimizer.step()
+        # L
+        self.set_layer_case("l")
+        self.run_preproces(case="l")
+        lloss, lret = self._run_model(model_inputs, labels)
+        if self.scaler is not None:
+            self.scaler.scale(lloss).backward()
+        else:
+            lloss.backward()
+        # optimizer
+        self.optimizer.step()
 
-            self.optimizer.zero_grad()
+        self.optimizer.zero_grad()
 
-            self.run_postproces(case="l")
+        self.run_postproces(case="l")
+        # end of no_sync 
 
         # S
         self.set_layer_case("s")
@@ -233,10 +235,11 @@ class DLRTTrainer:
 
         # todo: set up scheduler
         if self.adaptive and adapt:
+            #print(self.counter)
             self.run_rank_adaption()
 
-        if dist.get_rank() == 0 and self.counter % 100 == 0:
-            print(self.get_all_ranks())
+            #if dist.get_rank() == 0:# and self.counter % 100 == 0:
+            #    print(self.get_all_ranks())
         self.counter += 1
 
         return self.return_tuple(sloss, sret)
