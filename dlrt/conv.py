@@ -720,7 +720,7 @@ class DLRTConv2dAdaptive(_ConvNd):
             #     [inp_unf.transpose(1, 2), v_hat, s_hat.T, u_hat.T],
             # )
             # out_unf = inp_unf.transpose(1, 2) @ v_hat @ s_hat.T @ u_hat.T
-            second = torch.linalg.multi_dot([v_hat @ s_hat.T @ u_hat.T])
+            second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
             second[(second >= eps) & (second <= -eps)] *= 0
             out_unf = inp_unf.transpose(1, 2) @ second
         else:

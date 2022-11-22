@@ -500,7 +500,9 @@ class DLRTLinearAdaptive(DLRTModule):
             # ret = (input @ self.u[:, : self.low_rank]) @ self.lt[: self.low_rank]
         else:  # s-step
             lr2 = 2 * self.low_rank
-            second = self.unp1[:, :lr2] @ self.s[:lr2, :lr2] @ self.vtnp1[:lr2]
+            second = torch.linalg.multi_dot(
+                [self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
+            )
             second[(second >= eps) & (second <= -eps)] *= 0
             ret = input @ second
             # ret = torch.linalg.multi_dot(
