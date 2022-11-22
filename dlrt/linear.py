@@ -481,20 +481,30 @@ class DLRTLinearAdaptive(DLRTModule):
 
     def forward(self, input: Tensor) -> Tensor:
         if self.train_case == "k":  # k-step
-            ret = torch.linalg.multi_dot(
-                [input, self.k[:, : self.low_rank], self.vt[: self.low_rank]],
-            )
+            # remove elements close to 0
+            second = self.k[:, : self.low_rank] @ self.vt[: self.low_rank]
+            second[(second >= 1e-5) & (second <= -1e-5)] *= 0
+            ret = input @ second
+            # ret = torch.linalg.multi_dot(
+            #     [input, self.k[:, : self.low_rank], self.vt[: self.low_rank]],
+            # )
             # ret = (input @ self.k[:, : self.low_rank]) @ self.vt[: self.low_rank]
         elif self.train_case == "l":  # l-step
-            ret = torch.linalg.multi_dot(
-                [input, self.u[:, : self.low_rank], self.lt[: self.low_rank]],
-            )
+            second = self.u[:, : self.low_rank] @ self.lt[: self.low_rank]
+            second[(second >= 1e-5) & (second <= -1e-5)] *= 0
+            ret = input @ second
+            # ret = torch.linalg.multi_dot(
+            #     [input, self.u[:, : self.low_rank], self.lt[: self.low_rank]],
+            # )
             # ret = (input @ self.u[:, : self.low_rank]) @ self.lt[: self.low_rank]
         else:  # s-step
             lr2 = 2 * self.low_rank
-            ret = torch.linalg.multi_dot(
-                [input, self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
-            )
+            second = self.unp1[:, :lr2] @ self.s[:lr2, :lr2] @ self.vtnp1[:lr2]
+            second[(second >= 1e-5) & (second <= -1e-5)] *= 0
+            ret = input @ second
+            # ret = torch.linalg.multi_dot(
+            #     [input, self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
+            # )
             # ret = ((input @ self.unp1[:, :lr2]) @ self.s[:lr2, :lr2]) @ self.vtnp1[:lr2]
 
         return ret if self.bias is None else ret + self.bias

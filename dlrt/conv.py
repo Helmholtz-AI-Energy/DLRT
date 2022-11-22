@@ -689,21 +689,28 @@ class DLRTConv2dAdaptive(_ConvNd):
 
         if self.train_case == "k":
             k, v = self.k[:, : self.low_rank], self.v[:, : self.low_rank]
+            second = v @ k.T
+            second[(second >= 1e-5) & (second <= -1e-5)] *= 0
+
             # print([inp_unf.transpose(1, 2).shape, v.shape, k.T.shape], self.low_rank)
             # out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), v, k.T])
-            out_unf = inp_unf.transpose(1, 2) @ v @ k.T
+
+            out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
         elif self.train_case == "l":
             # out_unf = torch.linalg.multi_dot(
             #     [inp_unf.transpose(1, 2), self.l[:, : self.low_rank], self.u[:, : self.low_rank].T],
             # )
-            out_unf = (
-                inp_unf.transpose(1, 2)
-                @ self.l[:, : self.low_rank]
-                @ self.u[
-                    :,
-                    : self.low_rank,
-                ].T
-            )
+            second = self.l[:, : self.low_rank] @ self.u[:, : self.low_rank].T
+            second[(second >= 1e-5) & (second <= -1e-5)] *= 0
+            out_unf = inp_unf.transpose(1, 2) @ second
+            # out_unf = (
+            #     inp_unf.transpose(1, 2)
+            #     @ self.l[:, : self.low_rank]
+            #     @ self.u[
+            #         :,
+            #         : self.low_rank,
+            #     ].T
+            # )
         elif self.train_case == "s":
             u_hat = self.u_hat[:, : 2 * self.low_rank]
             s_hat = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank]
@@ -711,7 +718,10 @@ class DLRTConv2dAdaptive(_ConvNd):
             # out_unf = torch.linalg.multi_dot(
             #     [inp_unf.transpose(1, 2), v_hat, s_hat.T, u_hat.T],
             # )
-            out_unf = inp_unf.transpose(1, 2) @ v_hat @ s_hat.T @ u_hat.T
+            # out_unf = inp_unf.transpose(1, 2) @ v_hat @ s_hat.T @ u_hat.T
+            second = v_hat @ s_hat.T @ u_hat.T
+            second[(second >= 1e-5) & (second <= -1e-5)] *= 0
+            out_unf = inp_unf.transpose(1, 2) @ second
         else:
             raise ValueError(f"Invalude step value: {self.step}")
 
@@ -799,7 +809,6 @@ class DLRTConv2dAdaptive(_ConvNd):
         except torch._C._LinAlgError as e:
             print(f"Error in SVD: {e}")
             return
-
 
         # tol = self.theta * torch.linalg.norm(d)  # if not self.absolute else self.theta
         tol = self.eps_adapt * torch.linalg.norm(d)
