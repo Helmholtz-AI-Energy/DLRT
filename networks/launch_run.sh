@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 
 # Slurm job configuration
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=4
 ### #SBATCH --gpus-per-task=1
-#SBATCH --time=01:00:00
+#SBATCH --time=04:00:00
 #SBATCH --job-name=dlrt-ddp
 #SBATCH --partition=accelerated
 #SBATCH --account=haicore-project-scc
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:1
 #SBATCH --output="/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/logs/slurm-%j"
 
 ml purge
@@ -60,10 +60,10 @@ echo "Loading data from ${DATA_PREFIX}"
 #echo "${SCRIPT_DIR}"
 pwd
 echo "config: ${CONFIG}"
-echo "srun ${SRUN_PARAMS[@]} singularity exec --nv \
-  --bind ${DATA_PREFIX},${SCRIPT_DIR},/scratch,/tmp ${SINGULARITY_FILE} \
-    bash -c python resnet.py --data=${DATA_PREFIX} --world-size=${SLURM_NTASKS}"
+#echo "srun ${SRUN_PARAMS[@]} singularity exec --nv \
+#  --bind ${DATA_PREFIX},${SCRIPT_DIR},/scratch,/tmp ${SINGULARITY_FILE} \
+#    bash -c python resnet.py --data=${DATA_PREFIX} --world-size=${SLURM_NTASKS}"
 
 srun "${SRUN_PARAMS[@]}" singularity exec --nv \
   --bind "${DATA_PREFIX}","${SCRIPT_DIR}","/scratch","/tmp","/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/dlrt/":"/opt/conda/lib/python3.8/site-packages/dlrt/" "${SINGULARITY_FILE}" \
-    bash -c "python -u resnet.py --data=${DATA_PREFIX} --world-size=${SLURM_NTASKS} -b 256 -p 100 --lr 0.05 --momentum 0.1 --wd 0."
+    bash -c "python -u resnet.py --data=${DATA_PREFIX} --world-size=${SLURM_NTASKS} -b 128 -p 10 --lr 0.05 --momentum 0.0 --wd 0.0 -a resnet50"

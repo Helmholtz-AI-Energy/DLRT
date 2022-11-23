@@ -195,6 +195,7 @@ def main():
     # DistributedDataParallel will use all available devices.
     if dist.is_initialized():
         args.gpu = dist.get_rank() % torch.cuda.device_count()  # only 4 gpus/node
+        print(args.gpu)
     else:
         args.gpu = 0
     torch.cuda.set_device(args.gpu)
@@ -219,7 +220,7 @@ def main():
         adaptive=True,
         criterion=nn.CrossEntropyLoss().to(device),
         init_ddp=dist.is_initialized(),
-        mixed_precision=False,
+        mixed_precision=False, #True, #False,
     )
     # print(dlrt_trainer)
 
@@ -257,7 +258,7 @@ def main():
     #     train_dataset = datasets.FakeData(1281167, (3, 224, 224), 1000, transforms.ToTensor())
     #     val_dataset = datasets.FakeData(50000, (3, 224, 224), 1000, transforms.ToTensor())
     # else:
-    dset_dict = dsets.get_imagenet_datasets(args.data, args.batch, args.workers)
+    dset_dict = dsets.get_imagenet_datasets(args.data, args.batch_size, args.workers)
     train_loader, train_sampler = dset_dict["train"]["loader"], dset_dict["train"]["sampler"]
     val_loader = dset_dict["val"]["loader"]
 

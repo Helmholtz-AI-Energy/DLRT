@@ -220,7 +220,7 @@ class _ConvNd(DLRTModule):
             if self.rmax < 10:
                 self.rmax = 20
             self.low_rank = self.rmax // 2
-            print("rmax: ", self.rmax, "low_rank: ", self.low_rank)
+            #print("rmax: ", self.rmax, "low_rank: ", self.low_rank)
         else:
             self.rmax = min([a, b]) // 2
             self.low_rank = int(self.rmax * low_rank_percent)
@@ -651,6 +651,7 @@ class DLRTConv2dAdaptive(_ConvNd):
                 nn.init.uniform_(self.bias, -bound, bound)
             del weight
 
+    #@torch.jit.script
     def forward(self, input):
         """
         forward phase for the convolutional layer. It has to contain the three different
@@ -662,7 +663,7 @@ class DLRTConv2dAdaptive(_ConvNd):
 
         inp_unf = F.unfold(
             input,
-            self.kernel_size,
+            self.kernel_size,  
             padding=self.padding,
             stride=self.stride,
         ).to(input.device)
@@ -806,10 +807,13 @@ class DLRTConv2dAdaptive(_ConvNd):
         rnk = self.low_rank
         s_small = self.s_hat[: 2 * rnk, : 2 * rnk]
         try:
-            u2, d, v2 = torch.linalg.svd(s_small)
+            u2, d, v2 = torch.linalg.svd(s_small.to(torch.float64), full_matrices=False)
         except torch._C._LinAlgError as e:
             print(f"Error in SVD: {e}")
             return
+        v2 = v2.to(self.s_hat.dtype, non_blocking=True)
+        u2 = u2.to(self.s_hat.dtype, non_blocking=True)
+
 
         # tol = self.theta * torch.linalg.norm(d)  # if not self.absolute else self.theta
         tol = self.eps_adapt * torch.linalg.norm(d)

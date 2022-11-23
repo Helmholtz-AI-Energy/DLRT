@@ -479,6 +479,7 @@ class DLRTLinearAdaptive(DLRTModule):
             self.kl_prepro()
             self.train_case = "k"
 
+    #@torch.jit.script
     def forward(self, input: Tensor) -> Tensor:
         eps = torch.finfo(input.dtype).eps
         if self.train_case == "k":  # k-step
@@ -595,11 +596,12 @@ class DLRTLinearAdaptive(DLRTModule):
         # TODO: 64 bit?
         s_small = self.s[: 2 * self.low_rank, : 2 * self.low_rank]
         try:
-            u2, sing, vh2 = torch.linalg.svd(s_small, full_matrices=False, driver="gesvdj")
+            u2, sing, vh2 = torch.linalg.svd(s_small.to(torch.float64), full_matrices=False, driver="gesvdj")
         except torch._C._LinAlgError as e:
             print(f"LinAlgError during SGD -> {e}")
             return
-        v2 = vh2.T
+        v2 = vh2.T.to(self.s.dtype, non_blocking=True)
+        u2 = u2.to(self.s.dtype, non_blocking=True)
         # d, u2, v2 = tf.linalg.svd(s_small)
 
         # absolute value treshold (try also relative one)
@@ -626,4 +628,5 @@ class DLRTLinearAdaptive(DLRTModule):
         self.u = nn.Parameter(self.unp1[:, : 2 * self.low_rank] @ u2[:, :new_sz], requires_grad=False)
         # self.vt.set_(v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :])
         self.vt = nn.Parameter(v2[:new_sz, :] @ self.vtnp1[: 2 * self.low_rank, :], requires_grad=False)
+        self.vt = nn.Parameter(new_vt, requires_grad=False)
         self.low_rank = int(rmax)
