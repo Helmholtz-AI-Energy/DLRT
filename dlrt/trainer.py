@@ -79,6 +79,11 @@ class DLRTTrainer:
             #        #if name == "conv1.l":
             #            #k_test = param
             #        print(name, param.requires_grad)
+        else:
+            self.kmodel = self.model
+            self.lmodel = self.model
+            self.smodel = self.model
+
         self.rank = 0 if not dist.is_initialized() else dist.get_rank()
         # need to re-init the optimizer with the new DLRT parameters
         optimizer_kwargs["params"] = self.model.parameters()
