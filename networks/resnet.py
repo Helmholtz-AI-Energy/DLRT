@@ -5,27 +5,25 @@ import os
 import random
 import shutil
 import time
-import warnings
 from enum import Enum
 
-import comm
-import datasets as dsets
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.nn as nn
-import torch.nn.parallel
 import torch.optim
 import torch.utils.data.distributed
-import torchvision.datasets as datasets
 import torchvision.models as models
-import torchvision.transforms as transforms
 from PIL import ImageFile
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 import dlrt
+
+import comm
+import datasets as dsets
 
 
 model_names = sorted(
@@ -136,30 +134,6 @@ parser.add_argument(
     help="use pre-trained model",
 )
 parser.add_argument(
-    "--world-size",
-    default=-1,
-    type=int,
-    help="number of nodes for distributed training",
-)
-parser.add_argument(
-    "--rank",
-    default=-1,
-    type=int,
-    help="node rank for distributed training",
-)
-parser.add_argument(
-    "--dist-url",
-    default="tcp://224.66.41.62:23456",
-    type=str,
-    help="url used to set up distributed training",
-)
-parser.add_argument(
-    "--dist-backend",
-    default="nccl",
-    type=str,
-    help="distributed backend",
-)
-parser.add_argument(
     "--seed",
     default=None,
     type=int,
@@ -220,7 +194,7 @@ def main():
         adaptive=True,
         criterion=nn.CrossEntropyLoss().to(device),
         init_ddp=dist.is_initialized(),
-        mixed_precision=False, #True, #False,
+        mixed_precision=False,  # True, #False,
     )
     # print(dlrt_trainer)
 
@@ -258,7 +232,12 @@ def main():
     #     train_dataset = datasets.FakeData(1281167, (3, 224, 224), 1000, transforms.ToTensor())
     #     val_dataset = datasets.FakeData(50000, (3, 224, 224), 1000, transforms.ToTensor())
     # else:
-    dset_dict = dsets.get_imagenet_datasets(args.data, args.batch_size, args.workers)
+    if os.environ["DATASET"] == "imagenet":
+        dset_dict = dsets.get_imagenet_datasets(args.data, args.batch_size, args.workers)
+    elif os.environ["DATASET"] == "cifar10":
+        dset_dict = dsets.get_cifar10_datasets(args.data, args.batch_size, args.workers)
+    else:
+        raise NotImplementedError(f"Dataset {os.environ['DATASET']} not implemented")
     train_loader, train_sampler = dset_dict["train"]["loader"], dset_dict["train"]["sampler"]
     val_loader = dset_dict["val"]["loader"]
 
@@ -271,28 +250,15 @@ def main():
             train_sampler.set_epoch(epoch)
 
         # train for one epoch
-        train(train_loader, dlrt_trainer, epoch, device, args)
+        train_loss = train(train_loader, dlrt_trainer, epoch, device, args)
 
         # evaluate on validation set
         _ = validate(val_loader, dlrt_trainer, args)
 
-        scheduler.step()
-
-        # remember best acc@1 and save checkpoint
-        # is_best = acc1 > best_acc1
-        # best_acc1 = max(acc1, best_acc1)
-
-        # if not args.multiprocessing_distributed or args.rank % 4 == 0:
-        #     save_checkpoint(
-        #         {
-        #             'epoch': epoch + 1,
-        #             'arch': args.arch,
-        #             'state_dict': model.state_dict(),
-        #             'best_acc1': best_acc1,
-        #             'optimizer': optimizer.state_dict(),
-        #             'scheduler': scheduler.state_dict()
-        #         }, is_best
-        #     )
+        if isinstance(scheduler, ReduceLROnPlateau):
+            scheduler.step(train_loss)
+        else:  # StelLR / others
+            scheduler.step()
 
 
 def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
@@ -335,6 +301,9 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
 
         if i % args.print_freq == 0:  # and rank == 0:
             progress.display(i + 1)
+    if dist.is_initialized():
+        losses.all_reduce()
+    return losses.avg
 
 
 def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
@@ -399,9 +368,6 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
 
     top1.all_reduce()
     top5.all_reduce()
-
-    # if dist.get_rank() == 0:
-    #    print(f"End of epoch, validation top1: {top1}\ttop5: {top5}")
 
     return top1.avg
 

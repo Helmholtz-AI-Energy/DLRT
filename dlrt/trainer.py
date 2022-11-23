@@ -6,7 +6,6 @@ from collections import namedtuple
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-
 from rich import print
 from rich.columns import Columns
 
@@ -59,11 +58,7 @@ class DLRTTrainer:
         self.model = self.replace_linear_layers(self.model)
         self.model = self._reset_last_layer_to_dense(self.model)
         if init_ddp:
-            # NOTE: every sync will be for S, K, and L right now. nothing else will be synced
-            #self.model = torch.nn.parallel.DistributedDataParallel(
-            #    self.model,
-            #    #find_unused_parameters=True,
-            #)  # , device_ids=[args.gpu])
+            # need a seperate DDP instance for each training case, only way to have diff buckets
             self.set_layer_case("k")
             self.run_preproces(case="k")
             self.kmodel = torch.nn.parallel.DistributedDataParallel(self.model)
@@ -73,12 +68,6 @@ class DLRTTrainer:
             self.set_layer_case("s")
             self.run_preproces(case="s")
             self.smodel = torch.nn.parallel.DistributedDataParallel(self.model, find_unused_parameters=True)
-            # if dist.is_initialized() and dist.get_rank() == 0:
-            #    c = 0
-            #    for name, param in self.model.named_parameters():
-            #        #if name == "conv1.l":
-            #            #k_test = param
-            #        print(name, param.requires_grad)
         else:
             self.kmodel = self.model
             self.lmodel = self.model
@@ -94,9 +83,11 @@ class DLRTTrainer:
         if mixed_precision:
             # TODO: should there be different scalers for different parameters?
             #       i.e. -> one for k, onr for s, one for l
-            self.scaler = torch.cuda.amp.GradScaler()
+            self.kscaler = torch.cuda.amp.GradScaler()
+            self.lscaler = torch.cuda.amp.GradScaler()
+            self.sscaler = torch.cuda.amp.GradScaler()
         else:
-            self.scaler = None
+            self.kscaler = None
         self.return_tuple = namedtuple("Trainer", ["loss", "output"])
         self.counter = 0
 
@@ -158,13 +149,12 @@ class DLRTTrainer:
     def _set_training_all_params(self, network, totrain):
         for n, m in network.named_parameters():
             m.requires_grad = totrain
-            #print('k', n, m.requires_grad)
-
+            # print('k', n, m.requires_grad)
 
     def set_layer_case(self, case):
         models = [self.model]
         if case in ["k", "l"]:
-            #self.model.eval()
+            # self.model.eval()
             self._set_training_all_params(network=self.model, totrain=False)
             try:
                 self._set_training_all_params(network=self.kmodel, totrain=False)
@@ -174,14 +164,14 @@ class DLRTTrainer:
                 pass
         else:  # s case -> train all layers
             self._set_training_all_params(network=self.model, totrain=True)
-            #self.model.train()
+            # self.model.train()
             try:
                 self._set_training_all_params(network=self.smodel, totrain=True)
-                #self.smodel.train()
+                # self.smodel.train()
                 models.append(self.smodel)
             except AttributeError:
                 pass
-            
+
         for m in models:
             self.__run_command_on_dlrt_layers(
                 module=m,  # getattr(self, f"{case}model"),
@@ -228,85 +218,48 @@ class DLRTTrainer:
         self.ranks = []
         return out_ranks
 
-    def _run_model(self, inputs, labels):
-        with torch.autocast(enabled=self.scaler is not None, device_type="cuda", dtype=torch.float16):
-            ret = self.model(inputs)
-            loss = self.criterion(ret, labels)
-        return loss, ret
+    def _run_model(self, inputs, labels, case):
+        if self.kscaler is not None:  # only test for kscaler -> rest are not always defined
+            scaler = getattr(self, f"{case}scaler")
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                output = getattr(self, f"{case}model")(inputs)
+                loss = self.criterion(output, labels)
+            scaler.scale(loss).backward()
+            nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
+            scaler.step(self.optimizer)
+            scaler.update()
+        else:
+            output = getattr(self, f"{case}model")(inputs)
+            loss = self.criterion(output, labels)
+            loss.backward()
+            self.optimizer.step()
+        return loss, output
 
     def train_step(self, model_inputs, labels, adapt=True):
         self.optimizer.zero_grad()
-        inputs = model_inputs  # FIXME: remove
         # K
         self.set_layer_case("k")
         self.run_preproces(case="k")
-        # TODO: autocast model with AMP
-        #with self.model.no_sync():
-        #for n, m in self.kmodel.named_parameters():
-        #    print('k', n, m.requires_grad)
-        kret = self.kmodel(inputs)
-        kloss = self.criterion(kret, labels)
-        #kloss, kret = self._run_model(model_inputs, labels)
-        if self.scaler is not None:
-            self.scaler.scale(kloss).backward()
-            nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-        else:
-            kloss.backward()
-            # optimizer
-            self.optimizer.step()
+        kloss, kret = self._run_model(model_inputs, labels, case="k")
 
         self.optimizer.zero_grad()
         self.run_postproces(case="k")
 
-            # L
-        inputs = inputs.detach()
+        # L
+        # inputs = inputs.detach()
         self.set_layer_case("l")
         self.run_preproces(case="l")
-        #for n, m in self.lmodel.named_parameters():
-        #    print('l', n, m.requires_grad)
-
-        #lloss, lret = self._run_model(model_inputs, labels)
-        lret = self.lmodel(inputs)
-        lloss = self.criterion(lret, labels)
-        if self.scaler is not None:
-            self.scaler.scale(lloss).backward()
-            nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-        else:
-            lloss.backward()
-            # optimizer
-            self.optimizer.step()
+        lloss, lret = self._run_model(model_inputs, labels, case="l")
 
         self.optimizer.zero_grad()
 
         self.run_postproces(case="l")
         # end of no_sync
-        inputs = inputs.detach()
+        # inputs = inputs.detach()
         # S
         self.set_layer_case("s")
         self.run_preproces(case="s")
-        #sloss, sret = self._run_model(model_inputs, labels)
-        sret = self.smodel(inputs)
-        sloss = self.criterion(sret, labels)
-        if self.scaler is not None:
-            self.scaler.scale(sloss).backward()
-            nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-        else:
-            sloss.backward()
-            self.optimizer.step()
-        # sret = self.model(model_inputs)
-        # sloss = self.criterion(sret, labels)
-        # sloss.backward()
-
-        # optimizer
-        #self.optimizer.step()
-        # if dist.get_rank() == 0:
-        #    print(f"S-backwards time: {time.perf_counter() - t3}")
+        sloss, sret = self._run_model(model_inputs, labels, case="s")
 
         # todo: set up scheduler
         if self.adaptive and adapt:
@@ -315,7 +268,6 @@ class DLRTTrainer:
             if self.rank == 0 and self.counter % 100 == 0:
                 columns = Columns(self.get_all_ranks(), equal=True, expand=True)
                 print(columns)
-                #print(self.get_all_ranks())
         self.counter += 1
 
         return self.return_tuple(sloss, sret)

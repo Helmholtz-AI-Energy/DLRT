@@ -15,18 +15,47 @@ imagenet_normalize = transforms.Normalize(
     std=[0.229, 0.224, 0.225],
 )
 
+cifar10_normalize = transforms.Normalize(
+    mean=[0.5, 0.5, 0.5],
+    std=[0.5, 0.5, 0.5],
+)
 
-def get_dataset(conf):
-    # get datasets
-    if conf["dataset_name"] == "imagenet":
-        train_dataset, train_loader, train_sampler = imagenet_train_dataset_plus_loader(conf)
-        val_dataset, val_loader = imagenet_get_val_dataset_n_loader(conf)
-    elif conf["dataset_name"] == "cifar10":
-        train_dataset, train_loader, train_sampler = cifar_train_dataset_n_loader(conf)
-        val_dataset, val_loader = cifar_val_set_n_loader(conf)
-    else:
-        raise NotImplementedError(f"'{conf['dataset_name']}' not a valid dataset name")
 
+# def get_dataset(conf):
+#     # get datasets
+#     if conf["dataset_name"] == "imagenet":
+#         train_dataset, train_loader, train_sampler = imagenet_train_dataset_plus_loader(conf)
+#         val_dataset, val_loader = imagenet_get_val_dataset_n_loader(conf)
+#     elif conf["dataset_name"] == "cifar10":
+#         train_dataset, train_loader, train_sampler = cifar10_train_dataset_n_loader(conf)
+#         val_dataset, val_loader = cifar10_val_set_n_loader(conf)
+#     else:
+#         raise NotImplementedError(f"'{conf['dataset_name']}' not a valid dataset name")
+#
+#     return {
+#         "train": {
+#             "dataset": train_dataset,
+#             "loader": train_loader,
+#             "sampler": train_sampler,
+#         },
+#         "val": {
+#             "dataset": val_dataset,
+#             "loader": val_loader,
+#         },
+#     }
+
+
+def get_imagenet_datasets(base_dir, batch_size, workers):
+    train_dataset, train_loader, train_sampler = imagenet_train_dataset_plus_loader(
+        base_dir=base_dir,
+        batch_size=batch_size,
+        workers=workers,
+    )
+    val_dataset, val_loader = imagenet_get_val_dataset_n_loader(
+        base_dir=base_dir,
+        batch_size=batch_size,
+        workers=workers,
+    )
     return {
         "train": {
             "dataset": train_dataset,
@@ -40,13 +69,13 @@ def get_dataset(conf):
     }
 
 
-def get_imagenet_datasets(base_dir, batch_size, workers):
-    train_dataset, train_loader, train_sampler = imagenet_train_dataset_plus_loader(
+def get_cifar10_datasets(base_dir, batch_size, workers):
+    train_dataset, train_loader, train_sampler = cifar10_train_dataset_plus_loader(
         base_dir=base_dir,
         batch_size=batch_size,
         workers=workers,
     )
-    val_dataset, val_loader = imagenet_get_val_dataset_n_loader(
+    val_dataset, val_loader = cifar10_val_dataset_n_loader(
         base_dir=base_dir,
         batch_size=batch_size,
         workers=workers,
@@ -127,19 +156,21 @@ def imagenet_get_val_dataset_n_loader(base_dir, batch_size, workers=6):
     return val_dataset, val_loader
 
 
-def cifar_train_dataset_n_loader(conf):
+def cifar10_train_dataset_plus_loader(base_dir, batch_size, workers=6):
     # CIFAR-10 dataset
+    train_dir = Path(base_dir) / "train"
     transform = transforms.Compose(
         [
             transforms.Pad(4),
             transforms.RandomHorizontalFlip(),
             transforms.RandomCrop(32),
             transforms.ToTensor(),
+            cifar10_normalize,
         ],
     )
 
     train_dataset = datasets.CIFAR10(
-        root=conf["train_dir"],
+        root=str(train_dir),
         train=True,
         transform=transform,
         download=True,
@@ -153,28 +184,22 @@ def cifar_train_dataset_n_loader(conf):
 
     train_loader = torch.utils.data.DataLoader(
         dataset=train_dataset,
-        batch_size=conf["local_batch_size"],
+        batch_size=batch_size,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
-        num_workers=conf["workers"],
+        num_workers=workers,
         persistent_workers=True,
     )
     return train_dataset, train_loader, train_sampler
 
 
-def cifar_val_set_n_loader(conf):
-    # transform = transforms.Compose(
-    #     [
-    #         transforms.Pad(4),
-    #         transforms.RandomHorizontalFlip(),
-    #         transforms.RandomCrop(32),
-    #         transforms.ToTensor()]
-    # )
+def cifar10_val_dataset_n_loader(base_dir, batch_size, workers=6):
+    val_dir = Path(base_dir) / "val"
 
     test_dataset = datasets.CIFAR10(
-        root=conf["val_dir"],
+        root=str(val_dir),
         train=False,
-        transform=transforms.ToTensor(),
+        transform=transforms.Compose([transforms.ToTensor(), cifar10_normalize]),
     )
 
     if dist.is_initialized():
@@ -184,9 +209,9 @@ def cifar_val_set_n_loader(conf):
 
     test_loader = torch.utils.data.DataLoader(
         dataset=test_dataset,
-        batch_size=conf["local_batch_size"],
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=conf["workers"],
+        num_workers=workers,
         sampler=sampler,
     )
     return test_dataset, test_loader
