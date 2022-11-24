@@ -190,6 +190,7 @@ def main():
     #     weight_decay=args.weight_decay
     # )
     # print("converting model to DLRT")
+    #print(model)
     dlrt_trainer = dlrt.DLRTTrainer(
         torch_model=model,
         optimizer_name="SGD",
@@ -205,7 +206,7 @@ def main():
         mixed_precision=False,
         rank_percent=0.9
     )
-    #print(dlrt_trainer.model)
+    print(dlrt_trainer.model)
     if args.rank == 0:
         print(dlrt_trainer.get_all_ranks())
         columns = Columns(dlrt_trainer.get_all_ranks(), equal=True, expand=True)

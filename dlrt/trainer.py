@@ -56,7 +56,9 @@ class DLRTTrainer:
         self.model = torch_model
         self.reset_layers = None
         self.model = self.replace_linear_layers(self.model)
-        self.model = self._reset_last_layer_to_dense(self.model)
+        #self.model = self.replace_linear_layers(self.model)
+        # TODO: fix the last layer issue...
+        #self.model = self._reset_last_layer_to_dense(self.model)
         if init_ddp:
             # need a seperate DDP instance for each training case, only way to have diff buckets
             self.set_layer_case("k")
@@ -105,7 +107,7 @@ class DLRTTrainer:
                 # TODO: device checks??
             ).to(device=module.weight.device, dtype=module.weight.dtype)
             self.reset_layers = [module, name]
-        elif isinstance(module, nn.Conv2d):
+        elif isinstance(module, nn.Conv1d):  # Conv2d):
             module_output = DLRTConv2d(
                 adaptive=self.adaptive,
                 low_rank_percent=self.rank_percent,
@@ -121,8 +123,12 @@ class DLRTTrainer:
                 eps_adapt=self.epsilon["conv2d"],
             ).to(device=module.weight.device, dtype=module.weight.dtype)
             self.reset_layers = [module, name]
+            #print(f"replacing {name} old: {module} with {module_output}")
+            #del module
+            #module = module_output
 
         for name, child in module.named_children():
+            #print(name, child.extra_repr())
             module_output.add_module(name, self.replace_linear_layers(child, name, process_group))
         del module
         return module_output
