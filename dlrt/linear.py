@@ -630,5 +630,5 @@ class DLRTLinearAdaptive(DLRTModule):
         self.u = nn.Parameter(self.unp1[:, : 2 * self.low_rank] @ u2[:, :new_sz], requires_grad=False)
         # self.vt.set_(v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :])
         self.vt = nn.Parameter(v2[:new_sz, :] @ self.vtnp1[: 2 * self.low_rank, :], requires_grad=False)
-        self.vt = nn.Parameter(new_vt, requires_grad=False)
+        # self.vt = nn.Parameter(new_vt, requires_grad=False)
         self.low_rank = int(rmax)

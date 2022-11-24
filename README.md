@@ -2,6 +2,16 @@
 # DLRT
 
 
+# TODO:
+- [x] transformers
+- [ ] resnet50 imagenet tests
+- [ ] autocast
+- [ ] test jit
+- [ ] graphs
+  - probably need to set up the rank adaption to avoid changing the memory until the graph is rebuilt
+- [ ] set up checkpointing/loading (trainer.py)
+
+
 <div align="center">
 
 [![PyPI - Version](https://img.shields.io/pypi/v/DLRT.svg)](https://pypi.python.org/pypi/DLRT)

@@ -11,6 +11,10 @@ MAX_TOKENS = 128
 
 class MultiHeadAttention(tf.keras.layers.Layer):
     def __init__(self, *, d_model, num_heads, tolerance):
+        # Torch translations:
+        #      d_model -> embed_dim
+        #      num_heads -> num_heads
+        #      tolerance -> eps_edapt for the layers
         super().__init__()
         self.num_heads = num_heads
         self.d_model = d_model
