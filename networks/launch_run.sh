@@ -68,4 +68,4 @@ echo "config: ${CONFIG}"
 
 srun "${SRUN_PARAMS[@]}" singularity exec --nv \
   --bind "${DATA_PREFIX}","${SCRIPT_DIR}","/scratch","/tmp","/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/dlrt/":"/opt/conda/lib/python3.8/site-packages/dlrt/" "${SINGULARITY_FILE}" \
-    bash -c "python -u resnet.py --data=${DATA_PREFIX} -b 128 -p 10 --lr 0.05 --momentum 0.1 --wd 0.00001 -a resnet18"
+    bash -c "python -u resnet.py --data=${DATA_PREFIX} -b 128 -p 10 --lr 0.1 --momentum 0.1 --wd 0.00001 -a resnet18"

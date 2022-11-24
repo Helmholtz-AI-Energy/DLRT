@@ -481,36 +481,36 @@ class DLRTLinearAdaptive(DLRTModule):
             self.kl_prepro()
             self.train_case = "k"
 
-    #@torch.jit.script
+    # @torch.jit.script
     def forward(self, input: Tensor) -> Tensor:
         eps = torch.finfo(input.dtype).eps
         if self.train_case == "k":  # k-step
             # remove elements close to 0
-            second = self.k[:, : self.low_rank] @ self.vt[: self.low_rank]
-            second[(second >= eps) & (second <= -eps)] *= 0
-            ret = input @ second
-            # ret = torch.linalg.multi_dot(
-            #     [input, self.k[:, : self.low_rank], self.vt[: self.low_rank]],
-            # )
+            #second = self.k[:, : self.low_rank] @ self.vt[: self.low_rank]
+            #second[(second >= eps) & (second <= -eps)] *= 0
+            #ret = input @ second
+            ret = torch.linalg.multi_dot(
+                [input, self.k[:, : self.low_rank], self.vt[: self.low_rank]],
+            )
             # ret = (input @ self.k[:, : self.low_rank]) @ self.vt[: self.low_rank]
         elif self.train_case == "l":  # l-step
-            second = self.u[:, : self.low_rank] @ self.lt[: self.low_rank]
-            second[(second >= eps) & (second <= -eps)] *= 0
-            ret = input @ second
-            # ret = torch.linalg.multi_dot(
-            #     [input, self.u[:, : self.low_rank], self.lt[: self.low_rank]],
-            # )
+            #second = self.u[:, : self.low_rank] @ self.lt[: self.low_rank]
+            #second[(second >= eps) & (second <= -eps)] *= 0
+            #ret = input @ second
+            ret = torch.linalg.multi_dot(
+                [input, self.u[:, : self.low_rank], self.lt[: self.low_rank]],
+            )
             # ret = (input @ self.u[:, : self.low_rank]) @ self.lt[: self.low_rank]
         else:  # s-step
             lr2 = 2 * self.low_rank
-            second = torch.linalg.multi_dot(
-                [self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
+            #second = torch.linalg.multi_dot(
+            #    [self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
+            #)
+            #second[(second >= eps) & (second <= -eps)] *= 0
+            #ret = input @ second
+            ret = torch.linalg.multi_dot(
+                [input, self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
             )
-            second[(second >= eps) & (second <= -eps)] *= 0
-            ret = input @ second
-            # ret = torch.linalg.multi_dot(
-            #     [input, self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
-            # )
             # ret = ((input @ self.unp1[:, :lr2]) @ self.s[:lr2, :lr2]) @ self.vtnp1[:lr2]
 
         return ret if self.bias is None else ret + self.bias
@@ -630,5 +630,5 @@ class DLRTLinearAdaptive(DLRTModule):
         self.u = nn.Parameter(self.unp1[:, : 2 * self.low_rank] @ u2[:, :new_sz], requires_grad=False)
         # self.vt.set_(v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :])
         self.vt = nn.Parameter(v2[:new_sz, :] @ self.vtnp1[: 2 * self.low_rank, :], requires_grad=False)
-        self.vt = nn.Parameter(new_vt, requires_grad=False)
+        #self.vt = nn.Parameter(new_vt, requires_grad=False)
         self.low_rank = int(rmax)
