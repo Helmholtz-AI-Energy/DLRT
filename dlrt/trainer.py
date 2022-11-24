@@ -204,12 +204,18 @@ class DLRTTrainer:
         for name, child in module.named_children():
             self.__run_command_on_dlrt_layers(child, command, kwargs)
 
-    def __collect_ranks(self, module):
+    def __collect_ranks(self, module, name=None):
         if hasattr(module, "dlrt"):
-            self.ranks.append(module.get_rank_percentage())
+            #lst = [name, None, None]
+
+            #perc, rnk = module.get_rank_percentage()
+            #lst[1] = perc
+            #lst[2] = rnk
+            self.ranks.append(f"{name} {module.get_rank_percentage()}")
+            #self.ranks.append(lst)
 
         for name, child in module.named_children():
-            self.__collect_ranks(child)
+            self.__collect_ranks(child, name)
 
     def get_all_ranks(self):
         self.ranks = []

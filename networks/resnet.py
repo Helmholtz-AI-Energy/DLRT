@@ -24,6 +24,8 @@ import dlrt
 
 import comm
 import datasets as dsets
+from rich import print as rprint
+from rich.columns import Columns
 
 
 model_names = sorted(
@@ -155,6 +157,11 @@ def main():
     print("comm init")
     if int(os.environ["SLURM_NTASKS"]) > 1:
         comm.init(method="nccl-slurm")
+        args.world_size = dist.get_world_size()
+        args.rank = dist.get_rank()
+    else:
+        args.world_size = 1
+        args.rank = 0
 
     # create model
     if args.pretrained:
@@ -190,12 +197,20 @@ def main():
             "lr": args.lr,
             "momentum": args.momentum,
             "weight_decay": args.weight_decay,
+            'nesterov': True,
         },
         adaptive=True,
         criterion=nn.CrossEntropyLoss().to(device),
         init_ddp=dist.is_initialized(),
-        mixed_precision=False,  # True, #False,
+        mixed_precision=False,
+        rank_percent=0.9
     )
+    #print(dlrt_trainer.model)
+    if args.rank == 0:
+        print(dlrt_trainer.get_all_ranks())
+        columns = Columns(dlrt_trainer.get_all_ranks(), equal=True, expand=True)
+        rprint(columns)
+
     # print(dlrt_trainer)
 
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
@@ -259,6 +274,8 @@ def main():
             scheduler.step(train_loss)
         else:  # StelLR / others
             scheduler.step()
+        if args.rank == 0:
+            print(dlrt_trainer.optimizer.param_groups[0]['lr'])
 
 
 def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
@@ -285,8 +302,10 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
-        output = trainer.train_step(images, target, adapt=(epoch > 0) or (i > 100))
-
+        output = trainer.train_step(images, target, adapt=False) #(epoch > 0) or (i > 100))
+        #print(output.output.shape, target.shape)
+        #argmax = torch.argmax(output.output, dim=1).to(torch.float32)
+        #print(argmax.mean(), argmax.max(), argmax.min(), argmax.std())
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output.output, target, topk=(1, 5))
         losses.update(output.loss.item(), images.size(0))
@@ -346,9 +365,9 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
     trainer.eval()
 
     run_validate(val_loader)
-
-    top1.all_reduce()
-    top5.all_reduce()
+    if dist.is_initialized():
+        top1.all_reduce()
+        top5.all_reduce()
 
     if len(val_loader.sampler) * args.world_size < len(val_loader.dataset):
         aux_val_dataset = Subset(
@@ -365,9 +384,10 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
         run_validate(aux_val_loader, len(val_loader))
 
     progress.display_summary()
-
-    top1.all_reduce()
-    top5.all_reduce()
+    
+    if dist.is_initialized():
+        top1.all_reduce()
+        top5.all_reduce()
 
     return top1.avg
 

@@ -21,7 +21,7 @@ def DLRTLinear(
     init_method: str = "random",
     device=None,
     dtype=None,
-    eps_adapt: float = 0.1,
+    eps_adapt: float = 0.01,
 ):
     """
     Gets a linear layer with the given features
@@ -319,7 +319,7 @@ class DLRTLinearAdaptive(DLRTModule):
         if low_rank_percent is None:
             # set the max low_rank to be such that the
             roots = np.roots([1, in_features + out_features, in_features * out_features])
-            pos_coeff = roots[roots > 0]
+            pos_coeff = roots[roots > 0]  # TODO: adjust factor?
             if len(pos_coeff) < 1:
                 self.rmax = min([in_features, out_features]) // 2
             else:
@@ -330,7 +330,9 @@ class DLRTLinearAdaptive(DLRTModule):
             self.low_rank = self.rmax // 2
         else:
             self.rmax = min([in_features, out_features]) // 2
-            self.low_rank = int(self.rmax * low_rank_percent)
+            self.low_rank = int(self.rmax * low_rank_percent * 10)
+            self.rmax = int(self.low_rank * 2)  # TODO: cleanup?
+            print(self.rmax, self.low_rank)
 
         self.basic_number_weights = out_features * in_features
 
@@ -397,39 +399,39 @@ class DLRTLinearAdaptive(DLRTModule):
         nn.init.kaiming_uniform_(self.n, a=math.sqrt(5))
         nn.init.kaiming_uniform_(self.m, a=math.sqrt(5))
         # need to check sizes...
-        # from k postpro ---------------------------------------------------
-        k_extended = torch.cat((self.k[:, :lr], self.u[:, :lr]), dim=1)
-        prev_u, _ = torch.linalg.qr(k_extended)
-        # aux_N -> aux_Unp1.T @ aux_U
-        self.unp1[:, :lr2] = prev_u
-        self.unp1.requires_grad = False
-        self.u.requires_grad = False
-        #   used in setting s,
-        self.n[: 2 * lr, :lr] = self.unp1[:, :lr2].T @ self.u[:, :lr]
-        self.n.requires_grad = False
-        # from l postpro ---------------------------------------------------
-        # print(self.lt[:lr].T.shape, self.vt[:lr].shape)
-        l_extended = torch.cat((self.lt[:lr].T, self.vt[:lr].T), dim=1)
-        # l_extended = torch.cat((self.lt[:lr], self.vt[:lr]), dim=1)
-        aux_Vnp1, _ = torch.linalg.qr(l_extended)
-        self.vtnp1[:lr2] = aux_Vnp1.T
-        self.m[:lr2, :lr] = self.vtnp1[:lr2, :] @ self.vt[:lr].T
-        self.vtnp1.requires_grad = False
-        self.m.requires_grad = False
-
-        # from rank adjustment ---------------------------------------------------
-        s_small = self.s[: 2 * self.low_rank, : 2 * self.low_rank]
-        u2, sing, vh2 = torch.linalg.svd(s_small, full_matrices=False)
-        v2 = vh2.T
-
-        rmax = self.rmax
-        # update s
-        self.s.set_(torch.diag(sing[:rmax]).to(**factory))
-
-        # create and update u and v
-        self.u.set_(self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax])
-        self.vt.set_(v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :])
-        # self.low_rank = int(rmax)
+        ## from k postpro ---------------------------------------------------
+        #k_extended = torch.cat((self.k[:, :lr], self.u[:, :lr]), dim=1)
+        #prev_u, _ = torch.linalg.qr(k_extended)
+        ## aux_N -> aux_Unp1.T @ aux_U
+        ##self.unp1[:, :lr2] = prev_u
+        ##self.unp1.requires_grad = False
+        #self.u.requires_grad = False
+        ##   used in setting s,
+        #self.n[: 2 * lr, :lr] = self.unp1[:, :lr2].T @ self.u[:, :lr]
+        #self.n.requires_grad = False
+        ## from l postpro ---------------------------------------------------
+        ## print(self.lt[:lr].T.shape, self.vt[:lr].shape)
+        #l_extended = torch.cat((self.lt[:lr].T, self.vt[:lr].T), dim=1)
+        ## l_extended = torch.cat((self.lt[:lr], self.vt[:lr]), dim=1)
+        #aux_Vnp1, _ = torch.linalg.qr(l_extended)
+        #self.vtnp1[:lr2] = aux_Vnp1.T
+        #self.m[:lr2, :lr] = self.vtnp1[:lr2, :] @ self.vt[:lr].T
+        #self.vtnp1.requires_grad = False
+        #self.m.requires_grad = False
+        #
+        ## from rank adjustment ---------------------------------------------------
+        #s_small = self.s[: 2 * self.low_rank, : 2 * self.low_rank]
+        #u2, sing, vh2 = torch.linalg.svd(s_small, full_matrices=False)
+        #v2 = vh2.T
+        #
+        #rmax = self.rmax
+        ## update s
+        #self.s.set_(torch.diag(sing[:rmax]).to(**factory))
+        #
+        ## create and update u and v
+        #self.u.set_(self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax])
+        #self.vt.set_(v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :])
+        ## self.low_rank = int(rmax)
 
     def get_classic_weight_repr(self):
         return self.k @ self.s @ self.lt

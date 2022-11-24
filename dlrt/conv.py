@@ -35,7 +35,7 @@ def DLRTConv2d(
     dtype=None,
     device=None,
     low_rank_percent=None,
-    eps_adapt: float = 0.1,
+    eps_adapt: float = 0.01,
 ):
     if adaptive:
         return DLRTConv2dAdaptive(
@@ -211,7 +211,7 @@ class _ConvNd(DLRTModule):
         if low_rank_percent is None:
             # set the max low_rank to be such that the
             roots = np.roots([1, a + b, a * b])
-            pos_coeff = roots[roots > 0]
+            pos_coeff = roots[roots > 0]  # TODO: adjust me?
             if len(pos_coeff) < 1:
                 self.rmax = min([a, b]) // 2
             else:
@@ -223,7 +223,14 @@ class _ConvNd(DLRTModule):
             #print("rmax: ", self.rmax, "low_rank: ", self.low_rank)
         else:
             self.rmax = min([a, b]) // 2
-            self.low_rank = int(self.rmax * low_rank_percent)
+            self.low_rank = int(self.rmax * low_rank_percent * 10)
+            self.rmax = int(self.low_rank * 2)  # TODO: cleanup
+        
+        if self.low_rank == 0:
+            print(a, b, out_channels)
+            self.low_rank = 100
+            self.rmax = int(self.low_rank * 2)
+        print(self.rmax, self.low_rank)
         # self.lr = int(low_rank_percent * weight.numel())
 
         # TODO: transposed things
@@ -502,7 +509,7 @@ class DLRTConv2dAdaptive(_ConvNd):
         dtype=None,
         device=None,
         low_rank_percent=None,
-        eps_adapt: float = 0.1,
+        eps_adapt: float = 0.01,
     ) -> None:
         """
         Initializer for the convolutional low rank layer (filterwise), extention of the classical Pytorch's convolutional layer.
@@ -819,7 +826,7 @@ class DLRTConv2dAdaptive(_ConvNd):
         tol = self.eps_adapt * torch.linalg.norm(d)
         rmax = int(np.floor(d.shape[0] / 2))
         for j in range(0, 2 * rmax - 1):
-            tmp = torch.linalg.norm(d[j : 2 * rmax - 1])
+            tmp = torch.linalg.norm(d[j : 2 * rmax - 1]) 
             if tmp < tol:
                 rmax = j
                 break

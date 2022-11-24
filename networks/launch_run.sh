@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 # Slurm job configuration
-#SBATCH --nodes=2
-#SBATCH --ntasks-per-node=4
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
 ### #SBATCH --gpus-per-task=1
-#SBATCH --time=04:00:00
+#SBATCH --time=00:10:00
 #SBATCH --job-name=dlrt-ddp
-#SBATCH --partition=accelerated
+#SBATCH --partition=dev_accelerated
 #SBATCH --account=haicore-project-scc
 #SBATCH --gres=gpu:1
 #SBATCH --output="/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/logs/slurm-%j"
@@ -48,8 +48,10 @@ elif [ "$DATASET" == "cifar10" ]; then
 elif [ "$DATASET" == "cifar100" ]; then
 	export DATA_PREFIX="/hkfs/home/dataset/datasets/CIFAR100/"
 else
-	echo "Defaulting to ImageNET training"
-	export DATA_PREFIX="/hkfs/home/dataset/datasets/imagenet-2012/original/imagenet-raw/ILSVRC/Data/CLS-LOC/"
+	echo "Defaulting to CIFAR10 training"
+	export DATASET="cifar10"
+	export DATA_PREFIX="/hkfs/home/dataset/datasets/CIFAR10/"
+	#export DATA_PREFIX="/hkfs/home/dataset/datasets/imagenet-2012/original/imagenet-raw/ILSVRC/Data/CLS-LOC/"
 fi
 
 
@@ -66,4 +68,4 @@ echo "config: ${CONFIG}"
 
 srun "${SRUN_PARAMS[@]}" singularity exec --nv \
   --bind "${DATA_PREFIX}","${SCRIPT_DIR}","/scratch","/tmp","/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/dlrt/":"/opt/conda/lib/python3.8/site-packages/dlrt/" "${SINGULARITY_FILE}" \
-    bash -c "python -u resnet.py --data=${DATA_PREFIX} --world-size=${SLURM_NTASKS} -b 128 -p 10 --lr 0.05 --momentum 0.0 --wd 0.0 -a resnet50"
+    bash -c "python -u resnet.py --data=${DATA_PREFIX} -b 128 -p 10 --lr 0.05 --momentum 0.1 --wd 0.00001 -a resnet18"

@@ -16,8 +16,8 @@ imagenet_normalize = transforms.Normalize(
 )
 
 cifar10_normalize = transforms.Normalize(
-    mean=[0.5, 0.5, 0.5],
-    std=[0.5, 0.5, 0.5],
+    mean=[0.4914, 0.4822, 0.4465],
+    std=[0.2023, 0.1994, 0.2010],
 )
 
 
