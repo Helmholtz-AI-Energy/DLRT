@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import tensorflow as tf
+
 from networks.dense_layers import DLRALayerAdaptive
 from networks.dense_layers import DLRALayerAdaptiveLinear
 
