@@ -305,8 +305,8 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
 
         output = trainer.train_step(images, target, adapt=False) #(epoch > 0) or (i > 100))
         #print(output.output.shape, target.shape)
-        #argmax = torch.argmax(output.output, dim=1).to(torch.float32)
-        #print(argmax.mean(), argmax.max(), argmax.min(), argmax.std())
+        argmax = torch.argmax(output.output, dim=1).to(torch.float32)
+        print(argmax.mean(), argmax.max(), argmax.min(), argmax.std())
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output.output, target, topk=(1, 5))
         losses.update(output.loss.item(), images.size(0))

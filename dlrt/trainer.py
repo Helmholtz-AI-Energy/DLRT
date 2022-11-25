@@ -71,6 +71,7 @@ class DLRTTrainer:
             self.run_preproces(case="s")
             self.smodel = torch.nn.parallel.DistributedDataParallel(self.model, find_unused_parameters=True)
         else:
+            #pass
             self.kmodel = self.model
             self.lmodel = self.model
             self.smodel = self.model
@@ -186,12 +187,14 @@ class DLRTTrainer:
             )
 
     def run_preproces(self, case):
+        # prev: getattr(self, f"{case}model")
         self.__run_command_on_dlrt_layers(module=self.model, command=f"{case}_preprocess")
 
     def run_postproces(self, case):
         self.__run_command_on_dlrt_layers(module=self.model, command=f"{case}_postprocess")
 
     def run_rank_adaption(self):
+        # TODO: run rank adaption for all??
         self.__run_command_on_dlrt_layers(module=self.model, command="rank_adaption")
 
     def train(self):
@@ -231,6 +234,8 @@ class DLRTTrainer:
         return out_ranks
 
     def _run_model(self, inputs, labels, case):
+        self.optimizer.zero_grad()
+
         if self.kscaler is not None:  # only test for kscaler -> rest are not always defined
             scaler = getattr(self, f"{case}scaler")
             with torch.autocast(device_type="cuda", dtype=torch.float16):
@@ -242,6 +247,7 @@ class DLRTTrainer:
             scaler.update()
         else:
             output = getattr(self, f"{case}model")(inputs)
+            #output = self.model(inputs)
             loss = self.criterion(output, labels)
             loss.backward()
             self.optimizer.step()
@@ -254,24 +260,25 @@ class DLRTTrainer:
         self.run_preproces(case="k")
         kloss, kret = self._run_model(model_inputs, labels, case="k")
 
-        self.optimizer.zero_grad()
+        #self.optimizer.zero_grad()
         self.run_postproces(case="k")
 
         # L
-        # inputs = inputs.detach()
+        model_inputs = model_inputs.detach()
         self.set_layer_case("l")
         self.run_preproces(case="l")
         lloss, lret = self._run_model(model_inputs, labels, case="l")
 
-        self.optimizer.zero_grad()
+        #self.optimizer.zero_grad()
 
         self.run_postproces(case="l")
         # end of no_sync
-        # inputs = inputs.detach()
+        model_inputs = model_inputs.detach()
         # S
         self.set_layer_case("s")
         self.run_preproces(case="s")
         sloss, sret = self._run_model(model_inputs, labels, case="s")
+        #self.optimizer.step()
 
         # todo: set up scheduler
         if self.adaptive and adapt:
