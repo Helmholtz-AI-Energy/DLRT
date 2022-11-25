@@ -56,9 +56,9 @@ class DLRTTrainer:
         self.model = torch_model
         self.reset_layers = None
         self.model = self.replace_linear_layers(self.model)
-        #self.model = self.replace_linear_layers(self.model)
+        # self.model = self.replace_linear_layers(self.model)
         # TODO: fix the last layer issue...
-        #self.model = self._reset_last_layer_to_dense(self.model)
+        # self.model = self._reset_last_layer_to_dense(self.model)
         if init_ddp:
             # need a seperate DDP instance for each training case, only way to have diff buckets
             self.set_layer_case("k")
@@ -71,7 +71,7 @@ class DLRTTrainer:
             self.run_preproces(case="s")
             self.smodel = torch.nn.parallel.DistributedDataParallel(self.model, find_unused_parameters=True)
         else:
-            #pass
+            # pass
             self.kmodel = self.model
             self.lmodel = self.model
             self.smodel = self.model
@@ -124,12 +124,12 @@ class DLRTTrainer:
                 eps_adapt=self.epsilon["conv2d"],
             ).to(device=module.weight.device, dtype=module.weight.dtype)
             self.reset_layers = [module, name]
-            #print(f"replacing {name} old: {module} with {module_output}")
-            #del module
-            #module = module_output
+            # print(f"replacing {name} old: {module} with {module_output}")
+            # del module
+            # module = module_output
 
         for name, child in module.named_children():
-            #print(name, child.extra_repr())
+            # print(name, child.extra_repr())
             module_output.add_module(name, self.replace_linear_layers(child, name, process_group))
         del module
         return module_output
@@ -156,12 +156,11 @@ class DLRTTrainer:
     def _set_training_all_params(self, network, totrain):
         for n, m in network.named_parameters():
             m.requires_grad = totrain
-            # print('k', n, m.requires_grad)
 
     def set_layer_case(self, case):
         models = [self.model]
         if case in ["k", "l"]:
-            # self.model.eval()
+            # turn off training on all layers
             self._set_training_all_params(network=self.model, totrain=False)
             try:
                 self._set_training_all_params(network=self.kmodel, totrain=False)
@@ -169,9 +168,8 @@ class DLRTTrainer:
                 models.append(getattr(self, f"{case}model"))
             except AttributeError:
                 pass
-        else:  # s case -> train all layers
+        else:  # s case -> train all layers, turn off training of K and L
             self._set_training_all_params(network=self.model, totrain=True)
-            # self.model.train()
             try:
                 self._set_training_all_params(network=self.smodel, totrain=True)
                 # self.smodel.train()
@@ -204,6 +202,7 @@ class DLRTTrainer:
         self.model.eval()
 
     def __run_command_on_dlrt_layers(self, module, command, kwargs=None):
+        # NOTE: the command must be a member function of DLRTModule
         if kwargs is None:
             kwargs = {}
 
@@ -215,13 +214,13 @@ class DLRTTrainer:
 
     def __collect_ranks(self, module, name=None):
         if hasattr(module, "dlrt"):
-            #lst = [name, None, None]
+            # lst = [name, None, None]
 
-            #perc, rnk = module.get_rank_percentage()
-            #lst[1] = perc
-            #lst[2] = rnk
+            # perc, rnk = module.get_rank_percentage()
+            # lst[1] = perc
+            # lst[2] = rnk
             self.ranks.append(f"{name} {module.get_rank_percentage()}")
-            #self.ranks.append(lst)
+            # self.ranks.append(lst)
 
         for name, child in module.named_children():
             self.__collect_ranks(child, name)
@@ -247,7 +246,7 @@ class DLRTTrainer:
             scaler.update()
         else:
             output = getattr(self, f"{case}model")(inputs)
-            #output = self.model(inputs)
+            # output = self.model(inputs)
             loss = self.criterion(output, labels)
             loss.backward()
             self.optimizer.step()
@@ -258,27 +257,46 @@ class DLRTTrainer:
         # K
         self.set_layer_case("k")
         self.run_preproces(case="k")
-        kloss, kret = self._run_model(model_inputs, labels, case="k")
-
-        #self.optimizer.zero_grad()
+        requires_grad = []
+        for n, m in self.kmodel.named_parameters():
+            requires_grad.append([n, m.requires_grad])
+        if self.rank == 0 and self.counter % 100 == 0:
+            columns = Columns(requires_grad, equal=True, expand=True)
+            print("k")
+            print(columns)
+        _, _ = self._run_model(model_inputs, labels, case="k")
         self.run_postproces(case="k")
+        self.optimizer.zero_grad()
 
         # L
-        model_inputs = model_inputs.detach()
+        # model_inputs = model_inputs.detach()
         self.set_layer_case("l")
         self.run_preproces(case="l")
-        lloss, lret = self._run_model(model_inputs, labels, case="l")
-
-        #self.optimizer.zero_grad()
+        requires_grad = []
+        for n, m in self.lmodel.named_parameters():
+            requires_grad.append([n, m.requires_grad])
+        if self.rank == 0 and self.counter % 100 == 0:
+            columns = Columns(requires_grad, equal=True, expand=True)
+            print("l")
+            print(columns)
+        _, _ = self._run_model(model_inputs, labels, case="l")
+        self.optimizer.zero_grad()
 
         self.run_postproces(case="l")
-        # end of no_sync
-        model_inputs = model_inputs.detach()
+        # end of no_sync??
+        # model_inputs = model_inputs.detach()
         # S
         self.set_layer_case("s")
         self.run_preproces(case="s")
+        requires_grad = []
+        for n, m in self.lmodel.named_parameters():
+            requires_grad.append([n, m.requires_grad])
+        if self.rank == 0 and self.counter % 100 == 0:
+            columns = Columns(requires_grad, equal=True, expand=True)
+            print("s")
+            print(columns)
         sloss, sret = self._run_model(model_inputs, labels, case="s")
-        #self.optimizer.step()
+        self.optimizer.step()
 
         # todo: set up scheduler
         if self.adaptive and adapt:
