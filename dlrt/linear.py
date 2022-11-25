@@ -330,7 +330,7 @@ class DLRTLinearAdaptive(DLRTModule):
             self.low_rank = self.rmax // 2
         else:
             self.rmax = min([in_features, out_features]) // 2
-            self.low_rank = int(self.rmax * low_rank_percent * 10)
+            self.low_rank = int(self.rmax * low_rank_percent)
             self.rmax = int(self.low_rank * 2)  # TODO: cleanup?
             print(self.rmax, self.low_rank)
 
