@@ -12,6 +12,7 @@ from rich.console import Console
 
 from .conv import DLRTConv2d
 from .linear import DLRTLinear
+
 console = Console(width=120)
 
 __all__ = ["DLRTTrainer"]
@@ -58,19 +59,19 @@ class DLRTTrainer:
         self.reset_layers = None
         self.rank = 0 if not dist.is_initialized() else dist.get_rank()
 
-        #requires_grad = []
-        #for n, m in self.model.named_parameters():
+        # requires_grad = []
+        # for n, m in self.model.named_parameters():
         #    requires_grad.append(f"{n}, {m.requires_grad}")
-        #if self.rank == 0:
+        # if self.rank == 0:
         #    columns = Columns(requires_grad, equal=True, expand=True)
         #    console.rule("Original Model")
         #    console.print(columns)
 
         self.model = self.replace_linear_layers(self.model)
-        #requires_grad = []
-        #for n, m in self.model.named_parameters():
+        # requires_grad = []
+        # for n, m in self.model.named_parameters():
         #    requires_grad.append(f"{n}, {m.requires_grad}")
-        #if self.rank == 0:
+        # if self.rank == 0:
         #    columns = Columns(requires_grad, equal=True, expand=True)
         #    console.rule("DLRT Model")
         #    console.print(columns)
@@ -266,27 +267,59 @@ class DLRTTrainer:
                 loss = self.criterion(output, labels)
             scaler.scale(loss).backward()
             nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
-            scaler.step(self.optimizer)
-            scaler.update()
+            # scaler.step(self.optimizer)
+            # scaler.update()
         else:
             output = getattr(self, f"{case}model")(inputs)
             # output = self.model(inputs)
             loss = self.criterion(output, labels)
             loss.backward()
-            self.optimizer.step()
-        return loss.clone().detach(), output.detach()
+            # self.optimizer.step()
+        if torch.isnan(loss):
+            raise RuntimeError(f"loss is NaN in case {case}! {output}")
+        class_loss = getattr(self, f"{case}loss")
+        class_loss *= 0.0
+        class_loss += loss
+        return loss, output
 
-    def train_step(self, model_inputs, labels, adapt=True):
+    def train_step(self, inputs, labels, adapt=True):
+        def _closure():
+            loss, _ = self._run_model(inputs, labels, case)
+            return loss
+
+        fact = {"device": inputs.device, "dtype": inputs.dtype}
+        self.kloss, self.lloss, self.sloss = (
+            torch.tensor(0, **fact),
+            torch.tensor(0, **fact),
+            torch.tensor(0, **fact),
+        )
+
+        for case in ["k", "l", "s"]:
+            self.set_layer_case(case)
+            self.run_preproces(case)
+            self.optimizer.step(closure=_closure)
+            if adapt and case == "s":
+                if self.adaptive and adapt:
+                    self.run_rank_adaption()
+
+                    if self.rank == 0 and self.counter % 100 == 0:
+                        columns = Columns(self.get_all_ranks(), equal=True, expand=True)
+                        print(columns)
+                self.counter += 1
+
+        print("losses", self.kloss.item(), self.lloss.item(), self.sloss.item())
+
+    def train_step_old(self, model_inputs, labels, adapt=True):
         self.optimizer.zero_grad()
         # K
         self.set_layer_case("k")
         self.run_preproces(case="k")
         kloss, kout = self._run_model(model_inputs, labels, case="k")
-        requires_grad = []
-        #for n, m in self.kmodel.named_parameters():
+        # requires_grad = []
+        # for n, m in self.kmodel.named_parameters():
         #    if m.requires_grad:
         #        requires_grad.append(f"{n}, {m.requires_grad}")  # , {m.grad}, {m}")
-        #if self.rank == 0 and self.counter % 100 == 0:
+        # if self.rank == 0 and self.counter % 100 == 0:
         #    columns = Columns(requires_grad, equal=True, expand=True)
         #    console.rule("k")
         #    console.print(columns)
@@ -299,10 +332,10 @@ class DLRTTrainer:
         # model_inputs = model_inputs.detach()
         self.set_layer_case("l")
         self.run_preproces(case="l")
-        #requires_grad = []
-        #for n, m in self.lmodel.named_parameters():
+        # requires_grad = []
+        # for n, m in self.lmodel.named_parameters():
         #    requires_grad.append(f"{n}, {m.requires_grad}")
-        #if self.rank == 0 and self.counter % 100 == 0:
+        # if self.rank == 0 and self.counter % 100 == 0:
         #    columns = Columns(requires_grad, equal=True, expand=True)
         #    console.rule("l")
         #    console.print(columns)
@@ -315,10 +348,10 @@ class DLRTTrainer:
         # S
         self.set_layer_case("s")
         self.run_preproces(case="s")
-        requires_grad = []
-        #for n, m in self.lmodel.named_parameters():
+        # requires_grad = []
+        # for n, m in self.lmodel.named_parameters():
         #    requires_grad.append(f"{n}, {m.requires_grad}")
-        #if self.rank == 0 and self.counter % 100 == 0:
+        # if self.rank == 0 and self.counter % 100 == 0:
         #    columns = Columns(requires_grad, equal=True, expand=True)
         #    console.rule("s")
         #    console.print(columns)
