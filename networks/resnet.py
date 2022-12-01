@@ -196,9 +196,9 @@ def main():
         optimizer_name="SGD",
         optimizer_kwargs={
             "lr": args.lr,
-            "momentum": args.momentum,
-            "weight_decay": args.weight_decay,
-            'nesterov': True,
+            #"momentum": args.momentum,
+            #"weight_decay": args.weight_decay,
+            #'nesterov': True,
         },
         adaptive=True,
         criterion=nn.CrossEntropyLoss().to(device),
@@ -338,6 +338,9 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
 
                 # compute output
                 output = trainer.valid_step(images, target)
+                argmax = torch.argmax(output.output, dim=1).to(torch.float32)
+                print(f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}")
+
 
                 # measure accuracy and record loss
                 acc1, acc5 = accuracy(output.output, target, topk=(1, 5))

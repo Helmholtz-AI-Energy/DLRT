@@ -630,7 +630,7 @@ class DLRTConv2dAdaptive(_ConvNd):
         # uniform(-1/sqrt(k), 1/sqrt(k)), where k = weight.size(1) * prod(*kernel_size)
         # For more details see: https://github.com/pytorch/pytorch/issues/15314#issuecomment-477448573
         # nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        factory_kwargs = {"device": self.s_hat.device, "dtype": self.s_hat.dtype}
+        factory_kwargs = {"device": self.bias.device, "dtype": self.bias.dtype}
         n, m = self.out_channels, self.in_channels * self.kernel_size_number
         _, s_ordered, _ = torch.linalg.svd(torch.diag(torch.abs(torch.randn(2 * self.rmax))))
         U = torch.randn(n, self.rmax)

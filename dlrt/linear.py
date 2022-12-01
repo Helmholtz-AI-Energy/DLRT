@@ -353,27 +353,27 @@ class DLRTLinearAdaptive(DLRTModule):
         self.lt = nn.Parameter(torch.empty((self.rmax, out_features), **factory_kwargs))
 
         self.u = nn.Parameter(
-            torch.empty((self.in_features, self.rmax), requires_grad=False, **factory_kwargs),
+            torch.zeros((self.in_features, self.rmax), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
         self.unp1 = nn.Parameter(
-            torch.empty((self.in_features, 2 * self.rmax), requires_grad=False, **factory_kwargs),
+            torch.zeros((self.in_features, 2 * self.rmax), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
         self.vt = nn.Parameter(
-            torch.empty((self.rmax, self.out_features), requires_grad=False, **factory_kwargs),
+            torch.zeros((self.rmax, self.out_features), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
         self.vtnp1 = nn.Parameter(
-            torch.empty((2 * self.rmax, self.out_features), requires_grad=False, **factory_kwargs),
+            torch.zeros((2 * self.rmax, self.out_features), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
         self.n = nn.Parameter(
-            torch.empty((2 * self.rmax, self.rmax), requires_grad=False, **factory_kwargs),
+            torch.zeros((2 * self.rmax, self.rmax), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
         self.m = nn.Parameter(
-            torch.empty((2 * self.rmax, self.rmax), requires_grad=False, **factory_kwargs),
+            torch.zeros((2 * self.rmax, self.rmax), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
 
@@ -471,12 +471,12 @@ class DLRTLinearAdaptive(DLRTModule):
         self.k.requires_grad = requires_grad
         self.s.requires_grad = requires_grad
         self.lt.requires_grad = requires_grad
-        self.u.requires_grad = requires_grad
-        self.unp1.requires_grad = requires_grad
-        self.vt.requires_grad = requires_grad
-        self.vtnp1.requires_grad = requires_grad
-        self.n.requires_grad = requires_grad
-        self.m.requires_grad = requires_grad
+        self.u.requires_grad = False  # requires_grad
+        self.unp1.requires_grad = False  # requires_grad
+        self.vt.requires_grad = False  # requires_grad
+        self.vtnp1.requires_grad = False  # requires_grad
+        self.n.requires_grad = False  # requires_grad
+        self.m.requires_grad = False  # requires_grad
         self.bias.requires_grad = requires_grad
 
     def change_training_case(self, case):
@@ -499,29 +499,29 @@ class DLRTLinearAdaptive(DLRTModule):
         eps = torch.finfo(input.dtype).eps
         if self.train_case == "k":  # k-step
             # remove elements close to 0
-            second = self.k[:, : self.low_rank] @ self.vt[: self.low_rank]
-            second[(second >= eps) & (second <= -eps)] *= 0
-            ret = input @ second
-            # ret = torch.linalg.multi_dot(
-            #     [input, self.k[:, : self.low_rank], self.vt[: self.low_rank]],
-            # )
+            #second = self.k[:, : self.low_rank] @ self.vt[: self.low_rank]
+            #second[(second >= eps) & (second <= -eps)] *= 0
+            #ret = input @ second
+            ret = torch.linalg.multi_dot(
+                [input, self.k[:, : self.low_rank], self.vt[: self.low_rank]],
+            )
         elif self.train_case == "l":  # l-step
-            second = self.u[:, : self.low_rank] @ self.lt[: self.low_rank]
-            second[(second >= eps) & (second <= -eps)] *= 0
-            ret = input @ second
-            # ret = torch.linalg.multi_dot(
-            #     [input, self.u[:, : self.low_rank], self.lt[: self.low_rank]],
-            # )
+            #second = self.u[:, : self.low_rank] @ self.lt[: self.low_rank]
+            #second[(second >= eps) & (second <= -eps)] *= 0
+            #ret = input @ second
+            ret = torch.linalg.multi_dot(
+                [input, self.u[:, : self.low_rank], self.lt[: self.low_rank]],
+            )
         else:  # s-step
             lr2 = 2 * self.low_rank
-            second = torch.linalg.multi_dot(
-                [self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
+            #second = torch.linalg.multi_dot(
+            #    [self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
+            #)
+            #second[(second >= eps) & (second <= -eps)] *= 0
+            #ret = input @ second
+            ret = torch.linalg.multi_dot(
+                [input, self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
             )
-            second[(second >= eps) & (second <= -eps)] *= 0
-            ret = input @ second
-            # ret = torch.linalg.multi_dot(
-            #     [input, self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
-            # )
 
         return ret if self.bias is None else ret + self.bias
 
@@ -535,9 +535,10 @@ class DLRTLinearAdaptive(DLRTModule):
         # k prepro
         # k -> aux_U @ s
         kls = self.s[: self.low_rank, : self.low_rank]
-        # self.k[:, : self.low_rank] = self.u[:, : self.low_rank] @ kls
-        self.k.set_(self.u[:, : self.low_rank] @ kls)
+        self.k[:, : self.low_rank] = self.u[:, : self.low_rank] @ kls
+        #self.k.set_(self.u[:, : self.low_rank] @ kls)
         self.k.requires_grad = True
+        self.k.training = True
         # self.k = nn.Parameter(self.u[:, : self.low_rank] @ kls, requires_grad=True)
 
     @torch.no_grad()
@@ -552,6 +553,7 @@ class DLRTLinearAdaptive(DLRTModule):
         # self.lt[: self.low_rank] = kls @ self.vt[: self.low_rank]
         self.lt.set_(kls @ self.vt[: self.low_rank])
         self.lt.requires_grad = True
+        self.lt.training = True
         # self.lt = nn.Parameter(kls @ self.vt[: self.low_rank], requires_grad=True)
 
     @torch.no_grad()
@@ -604,7 +606,9 @@ class DLRTLinearAdaptive(DLRTModule):
         # set s -> (aux_N @ s) @ aux_M.T
         self.s[:lr2, :lr2] = self.n[:lr2, :lr] @ self.s[:lr, :lr] @ self.m[:lr2, :lr].T
         self.s.requires_grad = True
+        self.s.training = True
         self.bias.requires_grad = True
+        self.bias.training = True
 
     @torch.no_grad()
     def rank_adaption(self):

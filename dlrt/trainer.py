@@ -9,6 +9,7 @@ import torch.nn as nn
 from rich import print
 from rich.columns import Columns
 from rich.console import Console
+from rich.pretty import Pretty
 
 from .conv import DLRTConv2d
 from .linear import DLRTLinear
@@ -100,6 +101,7 @@ class DLRTTrainer:
         # need to re-init the optimizer with the new DLRT parameters
         optimizer_kwargs["params"] = self.model.parameters()
         self.optimizer = getattr(torch.optim, optimizer_name)(**optimizer_kwargs)
+        print(Pretty({"Optimizer": optimizer_name, **optimizer_kwargs}))
         # todo: autocast
         self.scheduler = scheduler
         self.mixed_precision = mixed_precision
@@ -176,9 +178,11 @@ class DLRTTrainer:
     def _set_training_all_params(self, network, totrain):
         for n, m in network.named_parameters():
             m.requires_grad = totrain
+            m.training = totrain
 
     def set_layer_case(self, case):
         models = [self.model]
+        self.optimizer.zero_grad(set_to_none=True)
         if case in ["k", "l"]:
             # turn off training on all layers
             self._set_training_all_params(network=self.model, totrain=False)
@@ -258,7 +262,7 @@ class DLRTTrainer:
         return out_ranks
 
     def _run_model(self, inputs, labels, case):
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
 
         if self.kscaler is not None:  # only test for kscaler -> rest are not always defined
             scaler = getattr(self, f"{case}scaler")
@@ -274,12 +278,17 @@ class DLRTTrainer:
             # output = self.model(inputs)
             loss = self.criterion(output, labels)
             loss.backward()
+            nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
             # self.optimizer.step()
         if torch.isnan(loss):
+            for n, m in getattr(self, f"{case}model").named_parameters():
+                if n.startswith("fc"):
+                    print(n, m)
             raise RuntimeError(f"loss is NaN in case {case}! {output}")
         class_loss = getattr(self, f"{case}loss")
         class_loss *= 0.0
         class_loss += loss
+        self.output = output
         return loss, output
 
     def train_step(self, inputs, labels, adapt=True):
@@ -293,6 +302,7 @@ class DLRTTrainer:
             torch.tensor(0, **fact),
             torch.tensor(0, **fact),
         )
+        self.output = None
 
         for case in ["k", "l", "s"]:
             self.set_layer_case(case)
@@ -308,6 +318,8 @@ class DLRTTrainer:
                 self.counter += 1
 
         print("losses", self.kloss.item(), self.lloss.item(), self.sloss.item())
+        return self.return_tuple(self.sloss, self.output)
+
 
     def train_step_old(self, model_inputs, labels, adapt=True):
         self.optimizer.zero_grad()
