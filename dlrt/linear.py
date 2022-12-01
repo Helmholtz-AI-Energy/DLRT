@@ -388,9 +388,9 @@ class DLRTLinearAdaptive(DLRTModule):
 
     @torch.no_grad()
     def set_aux_vars(self):
-        # factory = {"device": self.k.device, "dtype": self.k.dtype}
-        # lr = self.low_rank
-        # lr2 = 2 * lr
+        factory = {"device": self.k.device, "dtype": self.k.dtype}
+        lr = self.low_rank
+        lr2 = 2 * lr
         # needed at top: u, vt
         nn.init.kaiming_uniform_(self.u, a=math.sqrt(5))
         nn.init.kaiming_uniform_(self.unp1, a=math.sqrt(5))
@@ -399,39 +399,39 @@ class DLRTLinearAdaptive(DLRTModule):
         nn.init.kaiming_uniform_(self.n, a=math.sqrt(5))
         nn.init.kaiming_uniform_(self.m, a=math.sqrt(5))
         # need to check sizes...
-        ## from k postpro ---------------------------------------------------
-        # k_extended = torch.cat((self.k[:, :lr], self.u[:, :lr]), dim=1)
-        # prev_u, _ = torch.linalg.qr(k_extended)
-        ## aux_N -> aux_Unp1.T @ aux_U
-        ## self.unp1[:, :lr2] = prev_u
-        ## self.unp1.requires_grad = False
-        # self.u.requires_grad = False
-        ##   used in setting s,
-        # self.n[: 2 * lr, :lr] = self.unp1[:, :lr2].T @ self.u[:, :lr]
-        # self.n.requires_grad = False
-        ## from l postpro ---------------------------------------------------
-        ## print(self.lt[:lr].T.shape, self.vt[:lr].shape)
-        # l_extended = torch.cat((self.lt[:lr].T, self.vt[:lr].T), dim=1)
-        ## l_extended = torch.cat((self.lt[:lr], self.vt[:lr]), dim=1)
-        # aux_Vnp1, _ = torch.linalg.qr(l_extended)
-        # self.vtnp1[:lr2] = aux_Vnp1.T
-        # self.m[:lr2, :lr] = self.vtnp1[:lr2, :] @ self.vt[:lr].T
-        # self.vtnp1.requires_grad = False
-        # self.m.requires_grad = False
+        # from k postpro ---------------------------------------------------
+        k_extended = torch.cat((self.k[:, :lr], self.u[:, :lr]), dim=1)
+        prev_u, _ = torch.linalg.qr(k_extended)
+        # aux_N -> aux_Unp1.T @ aux_U
+        # self.unp1[:, :lr2] = prev_u
+        # self.unp1.requires_grad = False
+        #self.u.requires_grad = False
+        #   used in setting s,
+        self.n[: 2 * lr, :lr] = self.unp1[:, :lr2].T @ self.u[:, :lr]
+        #self.n.requires_grad = False
+        # from l postpro ---------------------------------------------------
+        # print(self.lt[:lr].T.shape, self.vt[:lr].shape)
+        l_extended = torch.cat((self.lt[:lr].T, self.vt[:lr].T), dim=1)
+        # l_extended = torch.cat((self.lt[:lr], self.vt[:lr]), dim=1)
+        aux_Vnp1, _ = torch.linalg.qr(l_extended)
+        self.vtnp1[:lr2] = aux_Vnp1.T
+        self.m[:lr2, :lr] = self.vtnp1[:lr2, :] @ self.vt[:lr].T
+        #self.vtnp1.requires_grad = False
+        #self.m.requires_grad = False
         #
-        ## from rank adjustment ---------------------------------------------------
-        # s_small = self.s[: 2 * self.low_rank, : 2 * self.low_rank]
-        # u2, sing, vh2 = torch.linalg.svd(s_small, full_matrices=False)
-        # v2 = vh2.T
+        # from rank adjustment ---------------------------------------------------
+        s_small = self.s[: 2 * self.low_rank, : 2 * self.low_rank]
+        u2, sing, vh2 = torch.linalg.svd(s_small, full_matrices=False)
+        v2 = vh2.T
         #
-        # rmax = self.rmax
-        ## update s
-        # self.s.set_(torch.diag(sing[:rmax]).to(**factory))
+        rmax = self.rmax
+        # update s
+        self.s.set_(torch.diag(sing[:rmax]).to(**factory))
         #
         ## create and update u and v
-        # self.u.set_(self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax])
-        # self.vt.set_(v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :])
-        ## self.low_rank = int(rmax)
+        self.u.set_(self.unp1[:, : 2 * self.low_rank] @ u2[:, :rmax])
+        self.vt.set_(v2[:rmax, :] @ self.vtnp1[: 2 * self.low_rank, :])
+        # self.low_rank = int(rmax)
 
     def get_classic_weight_repr(self):
         return self.k @ self.s @ self.lt
@@ -466,6 +466,18 @@ class DLRTLinearAdaptive(DLRTModule):
                 bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
                 nn.init.uniform_(self.bias, -bound, bound)
         self.set_aux_vars()
+
+    def _change_params_requires_grad(self, requires_grad):
+        self.k.requires_grad = requires_grad
+        self.s.requires_grad = requires_grad
+        self.lt.requires_grad = requires_grad
+        self.u.requires_grad = requires_grad
+        self.unp1.requires_grad = requires_grad
+        self.vt.requires_grad = requires_grad
+        self.vtnp1.requires_grad = requires_grad
+        self.n.requires_grad = requires_grad
+        self.m.requires_grad = requires_grad
+        self.bias.requires_grad = requires_grad
 
     def change_training_case(self, case):
         # switch -> if current train case is k/l, do post for
@@ -515,11 +527,11 @@ class DLRTLinearAdaptive(DLRTModule):
 
     @torch.no_grad()
     def k_preprocess(self):
-        self.k.requires_grad = False
-        self.lt.requires_grad = False
-        self.s.requires_grad = False
-
-        self.bias.requires_grad = False
+        #self.k.requires_grad = False
+        #self.lt.requires_grad = False
+        #self.s.requires_grad = False
+        #self.bias.requires_grad = False
+        self._change_params_requires_grad(False)
         # k prepro
         # k -> aux_U @ s
         kls = self.s[: self.low_rank, : self.low_rank]
@@ -530,11 +542,12 @@ class DLRTLinearAdaptive(DLRTModule):
 
     @torch.no_grad()
     def l_preprocess(self):
-        self.k.requires_grad = False
-        self.lt.requires_grad = False
-        self.s.requires_grad = False
+        #self.k.requires_grad = False
+        #self.lt.requires_grad = False
+        #self.s.requires_grad = False
         # lt -> s @ aux_Vt
-        self.bias.requires_grad = False
+        #self.bias.requires_grad = False
+        self._change_params_requires_grad(False)
         kls = self.s[: self.low_rank, : self.low_rank]
         # self.lt[: self.low_rank] = kls @ self.vt[: self.low_rank]
         self.lt.set_(kls @ self.vt[: self.low_rank])
@@ -543,9 +556,9 @@ class DLRTLinearAdaptive(DLRTModule):
 
     @torch.no_grad()
     def k_postprocess(self):
-        self.k.requires_grad = False
-        self.lt.requires_grad = False
-        self.s.requires_grad = False
+        #self.k.requires_grad = False
+        #self.lt.requires_grad = False
+        #self.s.requires_grad = False
         lr = self.low_rank
         lr2 = 2 * self.low_rank
         # ------- k postpro ----------------------------------
@@ -556,19 +569,19 @@ class DLRTLinearAdaptive(DLRTModule):
         # aux_N -> aux_Unp1.T @ aux_U
         self.unp1[:, :lr2] = prev_u
         # NOTE: unp1 -> [512, 4608] - prev_u = [512, 512]
-        self.unp1.requires_grad = False
-        self.u.requires_grad = False
+        #self.unp1.requires_grad = False
+        #self.u.requires_grad = False
         #   used in setting s,
         # TODO: check me! unp1 might be wrong here...
         # aux_n = self.unp1[:, :lr2].T @ self.u[:, :lr]
         self.n[: 2 * lr, :lr] = self.unp1[:, :lr2].T @ self.u[:, :lr]
-        self.n.requires_grad = False
+        #self.n.requires_grad = False
 
     @torch.no_grad()
     def l_postprocess(self):
-        self.k.requires_grad = False
-        self.lt.requires_grad = False
-        self.s.requires_grad = False
+        #self.k.requires_grad = False
+        #self.lt.requires_grad = False
+        #self.s.requires_grad = False
         lr = self.low_rank
         lr2 = 2 * self.low_rank
         l_extended = torch.cat((self.lt[:lr].T, self.vt[:lr].T), dim=1)
@@ -576,13 +589,14 @@ class DLRTLinearAdaptive(DLRTModule):
         self.vtnp1[:lr2] = aux_Vnp1.T
         m = self.vtnp1[:lr2, :] @ self.vt[:lr].T
         self.m[:lr2, :lr] = m
-        self.vtnp1.requires_grad = False
-        self.m.requires_grad = False
+        #self.vtnp1.requires_grad = False
+        #self.m.requires_grad = False
 
     @torch.no_grad()
     def s_preprocess(self):
-        self.k.requires_grad = False
-        self.lt.requires_grad = False
+        #self.k.requires_grad = False
+        #self.lt.requires_grad = False
+        self._change_params_requires_grad(False)
 
         lr = self.low_rank
         lr2 = 2 * self.low_rank

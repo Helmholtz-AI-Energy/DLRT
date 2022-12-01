@@ -8,10 +8,11 @@ import torch.distributed as dist
 import torch.nn as nn
 from rich import print
 from rich.columns import Columns
+from rich.console import Console
 
 from .conv import DLRTConv2d
 from .linear import DLRTLinear
-
+console = Console(width=120)
 
 __all__ = ["DLRTTrainer"]
 
@@ -55,7 +56,25 @@ class DLRTTrainer:
         # replace linear layers
         self.model = torch_model
         self.reset_layers = None
+        self.rank = 0 if not dist.is_initialized() else dist.get_rank()
+
+        #requires_grad = []
+        #for n, m in self.model.named_parameters():
+        #    requires_grad.append(f"{n}, {m.requires_grad}")
+        #if self.rank == 0:
+        #    columns = Columns(requires_grad, equal=True, expand=True)
+        #    console.rule("Original Model")
+        #    console.print(columns)
+
         self.model = self.replace_linear_layers(self.model)
+        #requires_grad = []
+        #for n, m in self.model.named_parameters():
+        #    requires_grad.append(f"{n}, {m.requires_grad}")
+        #if self.rank == 0:
+        #    columns = Columns(requires_grad, equal=True, expand=True)
+        #    console.rule("DLRT Model")
+        #    console.print(columns)
+
         # self.model = self.replace_linear_layers(self.model)
         # TODO: fix the last layer issue...
         # self.model = self._reset_last_layer_to_dense(self.model)
@@ -108,7 +127,7 @@ class DLRTTrainer:
                 # TODO: device checks??
             ).to(device=module.weight.device, dtype=module.weight.dtype)
             self.reset_layers = [module, name]
-        elif isinstance(module, nn.Conv1d):  # Conv2d):
+        elif isinstance(module, nn.Conv1d):  # 2d
             module_output = DLRTConv2d(
                 adaptive=self.adaptive,
                 low_rank_percent=self.rank_percent,
@@ -162,15 +181,20 @@ class DLRTTrainer:
         if case in ["k", "l"]:
             # turn off training on all layers
             self._set_training_all_params(network=self.model, totrain=False)
+            self.model.eval()
             try:
                 self._set_training_all_params(network=self.kmodel, totrain=False)
                 self._set_training_all_params(network=self.lmodel, totrain=False)
                 models.append(getattr(self, f"{case}model"))
+                self.kmodel.eval()
+                self.lmodel.eval()
             except AttributeError:
                 pass
         else:  # s case -> train all layers, turn off training of K and L
+            self.model.train()
             self._set_training_all_params(network=self.model, totrain=True)
             try:
+                self.smodel.train()
                 self._set_training_all_params(network=self.smodel, totrain=True)
                 # self.smodel.train()
                 models.append(self.smodel)
@@ -250,37 +274,40 @@ class DLRTTrainer:
             loss = self.criterion(output, labels)
             loss.backward()
             self.optimizer.step()
-        return loss, output
+        return loss.clone().detach(), output.detach()
 
     def train_step(self, model_inputs, labels, adapt=True):
         self.optimizer.zero_grad()
         # K
         self.set_layer_case("k")
         self.run_preproces(case="k")
+        kloss, kout = self._run_model(model_inputs, labels, case="k")
         requires_grad = []
-        for n, m in self.kmodel.named_parameters():
-            requires_grad.append([n, m.requires_grad])
-        if self.rank == 0 and self.counter % 100 == 0:
-            columns = Columns(requires_grad, equal=True, expand=True)
-            print("k")
-            print(columns)
-        _, _ = self._run_model(model_inputs, labels, case="k")
+        #for n, m in self.kmodel.named_parameters():
+        #    if m.requires_grad:
+        #        requires_grad.append(f"{n}, {m.requires_grad}")  # , {m.grad}, {m}")
+        #if self.rank == 0 and self.counter % 100 == 0:
+        #    columns = Columns(requires_grad, equal=True, expand=True)
+        #    console.rule("k")
+        #    console.print(columns)
+        if torch.isnan(kloss):
+            raise RuntimeError(f"kloss is NaN! {kout}")
         self.run_postproces(case="k")
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
 
         # L
         # model_inputs = model_inputs.detach()
         self.set_layer_case("l")
         self.run_preproces(case="l")
-        requires_grad = []
-        for n, m in self.lmodel.named_parameters():
-            requires_grad.append([n, m.requires_grad])
-        if self.rank == 0 and self.counter % 100 == 0:
-            columns = Columns(requires_grad, equal=True, expand=True)
-            print("l")
-            print(columns)
-        _, _ = self._run_model(model_inputs, labels, case="l")
-        self.optimizer.zero_grad()
+        #requires_grad = []
+        #for n, m in self.lmodel.named_parameters():
+        #    requires_grad.append(f"{n}, {m.requires_grad}")
+        #if self.rank == 0 and self.counter % 100 == 0:
+        #    columns = Columns(requires_grad, equal=True, expand=True)
+        #    console.rule("l")
+        #    console.print(columns)
+        lloss, _ = self._run_model(model_inputs, labels, case="l")
+        self.optimizer.zero_grad(set_to_none=True)
 
         self.run_postproces(case="l")
         # end of no_sync??
@@ -289,12 +316,12 @@ class DLRTTrainer:
         self.set_layer_case("s")
         self.run_preproces(case="s")
         requires_grad = []
-        for n, m in self.lmodel.named_parameters():
-            requires_grad.append([n, m.requires_grad])
-        if self.rank == 0 and self.counter % 100 == 0:
-            columns = Columns(requires_grad, equal=True, expand=True)
-            print("s")
-            print(columns)
+        #for n, m in self.lmodel.named_parameters():
+        #    requires_grad.append(f"{n}, {m.requires_grad}")
+        #if self.rank == 0 and self.counter % 100 == 0:
+        #    columns = Columns(requires_grad, equal=True, expand=True)
+        #    console.rule("s")
+        #    console.print(columns)
         sloss, sret = self._run_model(model_inputs, labels, case="s")
         self.optimizer.step()
 
@@ -306,7 +333,7 @@ class DLRTTrainer:
                 columns = Columns(self.get_all_ranks(), equal=True, expand=True)
                 print(columns)
         self.counter += 1
-
+        print("losses", kloss.item(), lloss.item(), sloss.item())
         return self.return_tuple(sloss, sret)
 
     @torch.no_grad()
