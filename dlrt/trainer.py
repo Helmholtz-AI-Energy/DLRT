@@ -288,14 +288,12 @@ class DLRTTrainer:
         class_loss = getattr(self, f"{case}loss")
         class_loss *= 0.0
         class_loss += loss
+        # TODO: remove output ???
         self.output = output
         return loss, output
 
     def train_step(self, inputs, labels, adapt=True):
-        def _closure():
-            loss, _ = self._run_model(inputs, labels, case)
-            return loss
-
+        # TODO: remove this after debug...
         fact = {"device": inputs.device, "dtype": inputs.dtype}
         self.kloss, self.lloss, self.sloss = (
             torch.tensor(0, **fact),
@@ -303,23 +301,26 @@ class DLRTTrainer:
             torch.tensor(0, **fact),
         )
         self.output = None
-
-        for case in ["k", "l", "s"]:
+        self.optimizer.zero_grad()
+        for case in ["k", "l"]:
             self.set_layer_case(case)
             self.run_preproces(case)
-            self.optimizer.step(closure=_closure)
-            if adapt and case == "s":
-                if self.adaptive and adapt:
-                    self.run_rank_adaption()
+            self._run_model(inputs, labels, case)
+        self.optimizer.step()
+        self.set_layer_case("s")
+        self.run_preproces(case="s")
+        self.optimizer.step()
+        if adapt and case == "s":
+            if self.adaptive and adapt:
+                self.run_rank_adaption()
 
-                    if self.rank == 0 and self.counter % 100 == 0:
-                        columns = Columns(self.get_all_ranks(), equal=True, expand=True)
-                        print(columns)
-                self.counter += 1
+                if self.rank == 0 and self.counter % 100 == 0:
+                    columns = Columns(self.get_all_ranks(), equal=True, expand=True)
+                    print(columns)
+            self.counter += 1
 
         print("losses", self.kloss.item(), self.lloss.item(), self.sloss.item())
         return self.return_tuple(self.sloss, self.output)
-
 
     def train_step_old(self, model_inputs, labels, adapt=True):
         self.optimizer.zero_grad()
