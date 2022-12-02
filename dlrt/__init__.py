@@ -8,5 +8,6 @@ __version__ = "0.1.0"
 from .basic import *
 from .conv import *
 from .linear import *
+from .network import *
 from .trainer import *
 from .transformer import *

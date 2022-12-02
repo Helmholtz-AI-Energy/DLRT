@@ -205,7 +205,7 @@ class _ConvNd(DLRTModule):
         self.kernel_size_number = kernel_size_number
 
         self.basic_number_weights = in_channels * (out_channels // groups + kernel_size_number)
-        a, b = in_channels, (out_channels // groups + kernel_size_number)
+        # a, b = in_channels, (out_channels // groups + kernel_size_number)
 
         self.low_rank = int(
             min([self.out_channels, self.in_channels * self.kernel_size_number]) / 2,
@@ -586,41 +586,61 @@ class DLRTConv2dAdaptive(_ConvNd):
         #     torch.randn(self.rmax, self.rmax).to(device), requires_grad=False
         # )
 
-        # base = torch.empty((n, m), requires_grad=False, **factory_kwargs)
-        # nn.init.kaiming_uniform_(base, a=math.sqrt(5))
-        #
-        # U, s_ord, vh = torch.linalg.svd(base, full_matrices=True)
-        #
-        # self.u = torch.nn.Parameter(U[:, : self.low_rank].to(device), requires_grad=False)
-        # self.v = torch.nn.Parameter(vh.T[:, : self.low_rank], requires_grad=False)
-        #
-        # self.s_hat = torch.nn.Parameter(
-        #     torch.diag(s_ord[: self.low_rank]).to(**factory_kwargs),
-        #     requires_grad=True,
+        # self.U = torch.nn.Parameter(U.to(device), requires_grad=False)
+        # self.S_hat = torch.nn.Parameter(torch.diag(s_ordered).to(device))
+        # self.V = torch.nn.Parameter(V.to(device), requires_grad=False)
+        # self.U_hat = torch.nn.Parameter(
+        #     torch.randn(n, 2 * self.rmax).to(device), requires_grad=False
         # )
-        # self.k = torch.nn.Parameter(torch.empty(n, self.low_rank, **factory_kwargs), requires_grad=True)
-        # self.l = torch.nn.Parameter(  # noqa: E741
-        #     torch.empty(m, self.low_rank, **factory_kwargs),
-        #     requires_grad=True,
+        # self.V_hat = torch.nn.Parameter(
+        #     torch.randn(m, 2 * self.rmax).to(device), requires_grad=False
         # )
-        #
-        # self.n_hat = torch.nn.Parameter(
-        #     torch.empty((self.low_rank, self.low_rank), **factory_kwargs),
-        #     requires_grad=False,
+        # self.K = torch.nn.Parameter(torch.randn(n, self.rmax).to(device))
+        # self.L = torch.nn.Parameter(torch.randn(m, self.rmax).to(device))
+        # self.N_hat = torch.nn.Parameter(
+        #     torch.randn(2 * self.rmax, self.rmax).to(device), requires_grad=False
         # )
-        # self.m_hat = torch.nn.Parameter(
-        #     torch.empty((self.low_rank, self.low_rank), **factory_kwargs),
-        #     requires_grad=False,
+        # self.M_hat = torch.nn.Parameter(
+        #     torch.randn(2 * self.rmax, self.rmax).to(device), requires_grad=False
         # )
-        #
-        # self.u_hat = torch.nn.Parameter(
-        #     torch.empty(n, 2 * self.rmax).to(device),
-        #     requires_grad=False,
-        # )
-        # self.v_hat = torch.nn.Parameter(
-        #     torch.empty(m, 2 * self.rmax).to(device),
-        #     requires_grad=False,
-        # )
+        n, m = self.out_channels, self.in_channels * self.kernel_size_number
+        # ONLY create the parameters, reset_parameters fills them
+        self.s_hat = nn.Parameter(
+            torch.empty(self.rmax, self.rmax, **factory_kwargs),
+            requires_grad=True,
+        )
+        self.u = nn.Parameter(
+            torch.empty(n, self.rmax, **factory_kwargs),
+            requires_grad=False,
+        )
+        self.u_hat = nn.Parameter(
+            torch.empty(n, self.rmax, **factory_kwargs),
+            requires_grad=False,
+        )
+        self.v = nn.Parameter(
+            torch.empty(m, self.rmax, **factory_kwargs),
+            requires_grad=False,
+        )
+        self.v_hat = nn.Parameter(
+            torch.empty(m, self.rmax, **factory_kwargs),
+            requires_grad=False,
+        )
+        self.k = nn.Parameter(
+            torch.empty(n, self.rmax, **factory_kwargs),
+            requires_grad=True,
+        )
+        self.l = torch.nn.Parameter(  # noqa: E741
+            torch.randn(m, self.rmax, **factory_kwargs),
+            requires_grad=True,
+        )
+        self.n_hat = torch.nn.Parameter(
+            torch.randn(self.rmax, self.low_rank, **factory_kwargs),
+            requires_grad=False,
+        )
+        self.m_hat = torch.nn.Parameter(
+            torch.randn(self.rmax, self.low_rank, **factory_kwargs),
+            requires_grad=False,
+        )
 
         self.reset_parameters()
 
@@ -637,32 +657,16 @@ class DLRTConv2dAdaptive(_ConvNd):
         V = torch.randn(m, self.rmax)
         U, _, _ = torch.linalg.svd(U)
         V, _, _ = torch.linalg.svd(V)
-        self.u = torch.nn.Parameter(U.to(**factory_kwargs), requires_grad=False)
-        self.s_hat = torch.nn.Parameter(torch.diag(s_ordered).to(**factory_kwargs))
-        self.v = torch.nn.Parameter(V.to(**factory_kwargs), requires_grad=False)
+        self.u.set_(U.to(**factory_kwargs))  # , requires_grad=False
+        self.s_hat.set_(torch.diag(s_ordered).to(**factory_kwargs))
+        self.v.set_(V.to(**factory_kwargs))  # , requires_grad=False
         # below is with normal initialization?
-        self.u_hat = torch.nn.Parameter(
-            torch.randn(n, 2 * self.rmax).to(**factory_kwargs),
-            requires_grad=False,
-        )
-        self.v_hat = torch.nn.Parameter(
-            torch.randn(m, 2 * self.rmax).to(**factory_kwargs),
-            requires_grad=False,
-        )
-        self.k = torch.nn.Parameter(torch.randn(n, self.rmax).to(**factory_kwargs))
-        self.l = torch.nn.Parameter(torch.randn(m, self.rmax).to(**factory_kwargs))
-        self.n_hat = torch.nn.Parameter(
-            torch.randn(2 * self.rmax, self.rmax).to(**factory_kwargs),
-            requires_grad=False,
-        )
-        self.m_hat = torch.nn.Parameter(
-            torch.randn(2 * self.rmax, self.rmax).to(**factory_kwargs),
-            requires_grad=False,
-        )
-        self.S = torch.nn.Parameter(
-            torch.randn(self.rmax, self.rmax).to(**factory_kwargs),
-            requires_grad=False,
-        )
+        nn.init.kaiming_normal_(self.u_hat, a=math.sqrt(5))
+        nn.init.kaiming_normal_(self.v_hat, a=math.sqrt(5))
+        nn.init.kaiming_normal_(self.k, a=math.sqrt(5))
+        nn.init.kaiming_normal_(self.l, a=math.sqrt(5))
+        nn.init.kaiming_normal_(self.n_hat, a=math.sqrt(5))
+        nn.init.kaiming_normal_(self.m_hat, a=math.sqrt(5))
 
         # for testing
         # self.original_weight = Parameter(self.weight.reshape(self.original_shape))
@@ -680,7 +684,7 @@ class DLRTConv2dAdaptive(_ConvNd):
             del weight
 
     # @torch.jit.script
-    def forward(self, input):
+    def forward(self, input: Tensor) -> Tensor:
         """
         forward phase for the convolutional layer. It has to contain the three different
         phases for the steps 'K','L' and 'S' in order to be optimizable using dlrt.
@@ -716,44 +720,34 @@ class DLRTConv2dAdaptive(_ConvNd):
             + 1
         )
 
-        eps = torch.finfo(inp_unf.dtype).eps
+        # eps = torch.finfo(inp_unf.dtype).eps
         if self.train_case == "k":
             k, v = self.k[:, : self.low_rank], self.v[:, : self.low_rank]
-            second = v @ k.T
-            second[(second >= eps) & (second <= -eps)] *= 0
+            # second = v @ k.T
+            # second[(second >= eps) & (second <= -eps)] *= 0
+            # out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
 
             # print([inp_unf.transpose(1, 2).shape, v.shape, k.T.shape], self.low_rank)
-            # out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), v, k.T])
-
-            out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
+            out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), v, k.T])
         elif self.train_case == "l":
-            # out_unf = torch.linalg.multi_dot(
-            #     [inp_unf.transpose(1, 2), self.l[:, : self.low_rank], self.u[:, : self.low_rank].T],
-            # )
-            second = self.l[:, : self.low_rank] @ self.u[:, : self.low_rank].T
-            second[(second >= eps) & (second <= -eps)] *= 0
-            out_unf = inp_unf.transpose(1, 2) @ second
-            # out_unf = (
-            #     inp_unf.transpose(1, 2)
-            #     @ self.l[:, : self.low_rank]
-            #     @ self.u[
-            #         :,
-            #         : self.low_rank,
-            #     ].T
-            # )
+            out_unf = torch.linalg.multi_dot(
+                [inp_unf.transpose(1, 2), self.l[:, : self.low_rank], self.u[:, : self.low_rank].T],
+            )
+            # second = self.l[:, : self.low_rank] @ self.u[:, : self.low_rank].T
+            # second[(second >= eps) & (second <= -eps)] *= 0
+            # out_unf = inp_unf.transpose(1, 2) @ second
         elif self.train_case == "s":
             u_hat = self.u_hat[:, : 2 * self.low_rank]
             s_hat = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank]
             v_hat = self.v_hat[:, : 2 * self.low_rank]
-            # out_unf = torch.linalg.multi_dot(
-            #     [inp_unf.transpose(1, 2), v_hat, s_hat.T, u_hat.T],
-            # )
-            # out_unf = inp_unf.transpose(1, 2) @ v_hat @ s_hat.T @ u_hat.T
-            second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
-            second[(second >= eps) & (second <= -eps)] *= 0
-            out_unf = inp_unf.transpose(1, 2) @ second
+            # second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
+            # second[(second >= eps) & (second <= -eps)] *= 0
+            # out_unf = inp_unf.transpose(1, 2) @ second
+            out_unf = torch.linalg.multi_dot(
+                [inp_unf.transpose(1, 2), v_hat, s_hat.T, u_hat.T],
+            )
         else:
-            raise ValueError(f"Invalude step value: {self.step}")
+            raise ValueError(f"Invalid step value: {self.step}")
 
         if self.bias is not None:
             out_unf.add_(self.bias)
@@ -761,102 +755,108 @@ class DLRTConv2dAdaptive(_ConvNd):
             out_unf.transpose_(1, 2)
         return out_unf.view(batch_size, self.out_channels, out_h, out_w)
 
+    def _change_params_requires_grad(self, requires_grad):
+        self.k.requires_grad = requires_grad
+        self.s_hat.requires_grad = requires_grad
+        self.l.requires_grad = requires_grad
+        self.u.requires_grad = False  # requires_grad
+        self.u_hat.requires_grad = False  # requires_grad
+        self.v.requires_grad = False  # requires_grad
+        self.v_hat.requires_grad = False  # requires_grad
+        self.n_hat.requires_grad = False  # requires_grad
+        self.m_hat.requires_grad = False  # requires_grad
+        self.bias.requires_grad = requires_grad
+
+    @torch.no_grad()
     def k_preprocess(self):
-        self.k.requires_grad = False
-        self.l.requires_grad = False
-        self.s_hat.requires_grad = False
-        rnk = self.low_rank
-        # K = self.u[:, :rnk] @ self.s_hat[:rnk, :rnk]
-        # self.k[:, :rnk] = K
-        # self.k.set_(self.u[:, :rnk] @ self.s_hat[:rnk, :rnk])
-        self.k = nn.Parameter(self.u[:, :rnk] @ self.s_hat[:rnk, :rnk], requires_grad=True)
-        # self.k.set_(self.u @ self.s_hat)
+        self._change_params_requires_grad(False)
+        # k prepro
+        # k -> aux_U @ s
+        k = self.u[:, : self.low_rank] @ self.s_hat[: self.low_rank, : self.low_rank]
+        self.k[:, : self.low_rank] = k
+        self.k.requires_grad = True
 
-    def k_postprocess(self):
-        self.k.requires_grad = False
-        self.l.requires_grad = False
-        self.s_hat.requires_grad = False
-
-        # u_hat, _ = torch.linalg.qr(self.k)
-        # self.m_hat.set_(u_hat.T @ self.u)
-        # self.u.set_(u_hat)
-        rnk = self.low_rank
-        U_hat = torch.linalg.qr(torch.hstack((self.k[:, :rnk], self.u[:, :rnk])))[0]
-        # self.u_hat[:, :2 * rnk] = U_hat
-        # self.m_hat[:2 * rnk, :rnk] = self.u_hat[:, :2 * rnk].T @ self.u[:, :rnk]
-        # self.u_hat.set_(U_hat)
-        self.u_hat = nn.Parameter(U_hat, requires_grad=False)
-        # self.m_hat.set_(self.u_hat.T @ self.u[:, :rnk])
-        self.m_hat = nn.Parameter(self.u_hat.T @ self.u[:, :rnk], requires_grad=False)
-
+    @torch.no_grad()
     def l_preprocess(self):
-        self.k.requires_grad = False
-        self.l.requires_grad = False
-        self.s_hat.requires_grad = False
-        rnk = self.low_rank
-        # L = self.v[:, :rnk] @ self.s_hat[:rnk, :rnk].T
-        # self.l[:, :rnk] = L
-        # self.l.set_(self.v[:, :rnk] @ self.s_hat[: rnk, : rnk].T)
-        self.l = nn.Parameter(self.v[:, :rnk] @ self.s_hat[:rnk, :rnk].T, requires_grad=True)  # noqa: E741
-        # self.l.set_(self.v @ self.s_hat.T)
+        self._change_params_requires_grad(False)
+        L = self.v[:, : self.low_rank] @ self.s_hat[: self.low_rank, : self.low_rank].T
+        self.l[:, : self.low_rank] = L
+        self.l.requires_grad = True
 
+    @torch.no_grad()
+    def k_postprocess(self):
+        lr = self.low_rank
+        lr2 = 2 * self.low_rank
+        u_hat, _ = torch.linalg.qr(torch.hstack((self.k[:, :lr], self.u[:, :lr])))
+
+        self.u_hat[:, :lr2] = u_hat
+        self.m_hat[:lr2, :lr] = self.u_hat[:, :lr2].T @ self.u[:, :lr]
+
+    @torch.no_grad()
     def l_postprocess(self):
-        self.k.requires_grad = False
-        self.l.requires_grad = False
-        self.s_hat.requires_grad = False
+        lr = self.low_rank
+        lr2 = 2 * self.low_rank
+        V_hat, _ = torch.linalg.qr(torch.hstack((self.l[:, :lr], self.v[:, :lr])))
+        self.v_hat[:, :lr2] = V_hat
+        self.n_hat[:lr2, :lr] = self.v_hat[:, :lr2].T @ self.v[:, :lr]
 
-        rnk = self.low_rank
-        # v_hat, _ = torch.linalg.qr(self.l)
-        # self.n_hat.set_(v_hat.T @ self.v)
-        # self.v.data = v_hat
-        v_hat = torch.linalg.qr(torch.hstack((self.l[:, :rnk], self.v[:, :rnk])))[0]
-        # self.v_hat[:, :2 * rnk] = v_hat
-        # self.n_hat[:2 * rnk, :rnk] = self.v_hat[:, :2 * rnk].T @ self.v[:, :rnk]
-        # self.v_hat.set_(v_hat)
-        self.v_hat = nn.Parameter(v_hat, requires_grad=False)
-        # self.n_hat.set_(self.v_hat.T @ self.v)
-        self.n_hat = nn.Parameter(self.v_hat.T @ self.v, requires_grad=False)
-
+    @torch.no_grad()
     def s_preprocess(self):
-        self.k.requires_grad = False
-        self.l.requires_grad = False
-        self.s_hat.requires_grad = False
+        self._change_params_requires_grad(False)
 
-        rnk = self.low_rank
-        # self.s_hat.set_(torch.linalg.multi_dot([self.m_hat, self.s_hat, self.n_hat.T]))
-        s = self.m_hat[: 2 * rnk, :rnk] @ self.s_hat[:rnk, :rnk] @ self.n_hat[: 2 * rnk, :rnk].T
-        # self.s_hat[:2 * rnk, :2 * rnk] = s
-        # self.s_hat.set_(s)
-        self.s_hat = nn.Parameter(s, requires_grad=True)
+        lr = self.low_rank
+        lr2 = 2 * self.low_rank
+
+        s = torch.linalg.multi_dot(
+            [self.m_hat[:lr2, :lr], self.s_hat[:lr, :lr], self.n_hat[: 2 * lr, :lr].T],
+        )
+        self.s_hat[:lr2, :lr2] = s
+
+        # bias is trainable for the s step
+        # set s -> (aux_N @ s) @ aux_M.T
+        self.s_hat.requires_grad = True
+        self.bias.requires_grad = True
 
     @torch.no_grad()
     def rank_adaption(self):
-        # print("running rank_adaption")
-        rnk = self.low_rank
-        s_small = self.s_hat[: 2 * rnk, : 2 * rnk]
+        # 1) compute SVD of S
+        # d=singular values, u2 = left singuar vecs, v2= right singular vecs
+        # TODO: 64 bit?
+        s_small = self.s[: 2 * self.low_rank, : 2 * self.low_rank].clone().detach()
         try:
-            u2, d, v2 = torch.linalg.svd(s_small.to(torch.float64), full_matrices=False)
+            u2, sing, vh2 = torch.linalg.svd(
+                s_small.to(torch.float64),
+                full_matrices=False,
+                driver="gesvdj",
+            )
         except torch._C._LinAlgError as e:
-            print(f"Error in SVD: {e}")
+            print(f"LinAlgError during SVD -> {e}")
             return
-        v2 = v2.to(self.s_hat.dtype, non_blocking=True)
+        v2 = vh2.T.to(self.s_hat.dtype, non_blocking=True)
         u2 = u2.to(self.s_hat.dtype, non_blocking=True)
+        # d, u2, v2 = tf.linalg.svd(s_small)
 
-        # tol = self.theta * torch.linalg.norm(d)  # if not self.absolute else self.theta
-        tol = self.eps_adapt * torch.linalg.norm(d)
-        rmax = int(np.floor(d.shape[0] / 2))
+        # absolute value treshold (try also relative one)
+        # TODO: fixed threshold
+        tol = self.eps_adapt * torch.linalg.norm(sing)
+        rmax = sing.shape[0] // 2
         for j in range(0, 2 * rmax - 1):
-            tmp = torch.linalg.norm(d[j : 2 * rmax - 1])
+            tmp = torch.linalg.norm(sing[j : 2 * rmax - 1])
             if tmp < tol:
                 rmax = j
                 break
 
-        rmax = min([rmax, self.rmax])
-        rmax = max([rmax, 2])
+        # rmax = max(min(rmax, self.rmax), 2)  # -> handled by the 2 in the for loop above
+        # update s
 
-        self.s_hat = nn.Parameter(torch.diag(d[:rmax]).to(device=self.s_hat.device, dtype=self.s_hat.dtype))
-        # self.u[:, :rmax] = l.U_hat[:, :2 * rnk] @ u2[:, :rmax]
-        self.u = nn.Parameter(self.u_hat[:, : 2 * rnk] @ u2[:, :rmax], requires_grad=False)
-        # self.v[:, :rmax] = l.V_hat[:, :2 * rnk] @ (v2[:, :rmax])
-        self.v = nn.Parameter(self.v_hat[:, : 2 * rnk] @ (v2[:, :rmax]), requires_grad=False)
+        # new
+        rmax = max([min([rmax, self.rmax]), 2])
+
+        self.s_hat[:rmax, :rmax] = torch.diag(sing[:rmax]).to(
+            device=self.s_hat.device,
+            dtype=self.s_hat.dtype,
+        )
+        self.u[:, :rmax] = self.u_hat[:, : 2 * self.low_rank] @ u2[:, :rmax]
+        self.v[:, :rmax] = self.v_hat[:, : 2 * self.low_rank] @ (v2[:, :rmax])
+
         self.low_rank = int(rmax)
