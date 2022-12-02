@@ -720,40 +720,93 @@ class DLRTConv2dAdaptive(_ConvNd):
             + 1
         )
 
-        eps = torch.finfo(inp_unf.dtype).eps
-        if self.train_case == "k":
-            k, v = self.k[:, : self.low_rank], self.v[:, : self.low_rank]
-            second = v @ k.T
-            second[(second >= eps) & (second <= -eps)] *= 0
-            out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
-
-            # print([inp_unf.transpose(1, 2).shape, v.shape, k.T.shape], self.low_rank)
-            #out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), v, k.T])
-        elif self.train_case == "l":
-            #out_unf = torch.linalg.multi_dot(
-            #    [inp_unf.transpose(1, 2), self.l[:, : self.low_rank], self.u[:, : self.low_rank].T],
-            #)
-            second = self.l[:, : self.low_rank] @ self.u[:, : self.low_rank].T
-            second[(second >= eps) & (second <= -eps)] *= 0
-            out_unf = inp_unf.transpose(1, 2) @ second
-        elif self.train_case == "s":
-            u_hat = self.u_hat[:, : 2 * self.low_rank]
-            s_hat = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank]
-            v_hat = self.v_hat[:, : 2 * self.low_rank]
-            second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
-            second[(second >= eps) & (second <= -eps)] *= 0
-            out_unf = inp_unf.transpose(1, 2) @ second
-            #out_unf = torch.linalg.multi_dot(
-            #    [inp_unf.transpose(1, 2), v_hat, s_hat.T, u_hat.T],
-            #)
-        else:
-            raise ValueError(f"Invalid step value: {self.step}")
+        # # eps = torch.finfo(inp_unf.dtype).eps
+        # if self.train_case == "k":
+        #     k, v = self.k[:, : self.low_rank], self.v[:, : self.low_rank]
+        #     # second = v @ k.T
+        #     # second[(second >= eps) & (second <= -eps)] *= 0
+        #     # out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
+        #
+        #     # print([inp_unf.transpose(1, 2).shape, v.shape, k.T.shape], self.low_rank)
+        #     out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), v, k.T])
+        # elif self.train_case == "l":
+        #     out_unf = torch.linalg.multi_dot(
+        #         [inp_unf.transpose(1, 2), self.l[:, : self.low_rank], self.u[:, : self.low_rank].T],
+        #     )
+        #     # second = self.l[:, : self.low_rank] @ self.u[:, : self.low_rank].T
+        #     # second[(second >= eps) & (second <= -eps)] *= 0
+        #     # out_unf = inp_unf.transpose(1, 2) @ second
+        # elif self.train_case == "s":
+        #     u_hat = self.u_hat[:, : 2 * self.low_rank]
+        #     s_hat = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank]
+        #     v_hat = self.v_hat[:, : 2 * self.low_rank]
+        #     # second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
+        #     # second[(second >= eps) & (second <= -eps)] *= 0
+        #     # out_unf = inp_unf.transpose(1, 2) @ second
+        #     out_unf = torch.linalg.multi_dot(
+        #         [inp_unf.transpose(1, 2), v_hat, s_hat.T, u_hat.T],
+        #     )
+        # else:
+        #     raise ValueError(f"Invalid step value: {self.step}")
+        if self.train_case in ["k", "l"]:
+            out_unf = self.__conv_interior(
+                inp_unf,
+                case=self.train_case,
+                k=self.k,
+                lr=self.low_rank,
+                v=self.v,
+                l=self.l,
+                u=self.u,
+                s_hat=self.s_hat,
+            )
+        else:  # s case
+            out_unf = self.__conv_interior(
+                inp_unf,
+                case=self.train_case,
+                k=self.k,
+                lr=self.low_rank,
+                v=self.v_hat,
+                l=self.l,
+                u=self.u_hat,
+                s_hat=self.s_hat,
+            )
 
         if self.bias is not None:
             out_unf.add_(self.bias)
         else:
             out_unf.transpose_(1, 2)
         return out_unf.view(batch_size, self.out_channels, out_h, out_w)
+
+    @torch.jit.script
+    @staticmethod
+    def __conv_interior(
+        inp_unf: Tensor,
+        case: str,
+        k: Tensor,
+        lr: int,
+        v: Tensor,
+        l: Tensor,  # noqa: E741
+        u: Tensor,
+        s_hat: Tensor,
+    ) -> Tensor:
+        eps = torch.finfo(inp_unf.dtype).eps
+        if case == "k":
+            k, v = k[:, :lr], v[:, :lr]
+            second = v @ k.T
+            second[(second >= eps) & (second <= -eps)] *= 0
+            out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
+        elif case == "l":
+            second = l[:, :lr] @ u[:, :lr].T
+            second[(second >= eps) & (second <= -eps)] *= 0
+            out_unf = inp_unf.transpose(1, 2) @ second
+        else:  # case == "s":
+            u_hat = u[:, : 2 * lr]  # NOTE: not checking that this is u_hat!!
+            s_hat = s_hat[: 2 * lr, : 2 * lr]
+            v_hat = v[:, : 2 * lr]  # NOTE: not checking that this is v_hat!!
+            second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
+            second[(second >= eps) & (second <= -eps)] *= 0
+            out_unf = inp_unf.transpose(1, 2) @ second
+        return out_unf
 
     def _change_params_requires_grad(self, requires_grad):
         self.k.requires_grad = requires_grad
