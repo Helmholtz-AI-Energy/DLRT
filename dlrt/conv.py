@@ -777,8 +777,8 @@ class DLRTConv2dAdaptive(_ConvNd):
             out_unf.transpose_(1, 2)
         return out_unf.view(batch_size, self.out_channels, out_h, out_w)
 
-    @torch.jit.script
     @staticmethod
+    @torch.jit.script
     def __conv_interior(
         inp_unf: Tensor,
         case: str,
@@ -788,8 +788,21 @@ class DLRTConv2dAdaptive(_ConvNd):
         l: Tensor,  # noqa: E741
         u: Tensor,
         s_hat: Tensor,
+        eps16: float = torch.finfo(torch.float16).eps,
+        eps32: float = torch.finfo(torch.float32).eps,
+        eps64: float = torch.finfo(torch.float64).eps,
+
     ) -> Tensor:
-        eps = torch.finfo(inp_unf.dtype).eps
+        #eps = self._get_tensor_eps(inp_unf)  #torch.finfo(inp_unf.dtype).eps
+        if inp_unf.dtype == torch.float16:
+            eps = eps16
+        elif inp_unf.dtype == torch.float32:
+            eps = eps32
+        elif inp_unf.dtype == torch.float64:
+            eps = eps64
+        else:
+            raise RuntimeError(f"Expected x to be floating-point, got {inp_unf.dtype}")
+
         if case == "k":
             k, v = k[:, :lr], v[:, :lr]
             second = v @ k.T
@@ -807,6 +820,21 @@ class DLRTConv2dAdaptive(_ConvNd):
             second[(second >= eps) & (second <= -eps)] *= 0
             out_unf = inp_unf.transpose(1, 2) @ second
         return out_unf
+
+    def _get_tensor_eps(
+        x: torch.Tensor,
+        eps16: float = torch.finfo(torch.float16).eps,
+        eps32: float = torch.finfo(torch.float32).eps,
+        eps64: float = torch.finfo(torch.float64).eps,
+    ) -> float:
+        if x.dtype == torch.float16:
+            return eps16
+        elif x.dtype == torch.float32:
+            return eps32
+        elif x.dtype == torch.float64:
+            return eps64
+        else:
+            raise RuntimeError(f"Expected x to be floating-point, got {x.dtype}")
 
     def _change_params_requires_grad(self, requires_grad):
         self.k.requires_grad = requires_grad
