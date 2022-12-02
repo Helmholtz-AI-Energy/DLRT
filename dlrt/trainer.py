@@ -121,8 +121,8 @@ class DLRTTrainer:
         self.output = None
         self.optimizer.zero_grad()
         for case in ["k", "l"]:
-            self.set_layer_case(case)
-            self.run_preprocess(case)
+            self.model.set_layer_case(case)
+            self.model.run_preprocess(case)
             # requires_grad = []
             # for n, m in self.kmodel.named_parameters():
             #     if n.startswith("fc"):  #m.requires_grad:
@@ -135,10 +135,10 @@ class DLRTTrainer:
             self._run_model(inputs, labels, case)
         self.optimizer.step()
         self.optimizer.zero_grad()
-        self.run_postprocess("k")
-        self.run_postprocess("l")
-        self.set_layer_case("s")
-        self.run_preprocess(case="s")
+        self.model.run_postprocess("k")
+        self.model.run_postprocess("l")
+        self.model.set_layer_case("s")
+        self.model.run_preprocess(case="s")
 
         # requires_grad = []
         # for n, m in self.kmodel.named_parameters():
@@ -154,21 +154,21 @@ class DLRTTrainer:
         self.optimizer.step()
         if adapt and case == "s":
             if self.adaptive and adapt:
-                self.run_rank_adaption()
+                self.model.run_rank_adaption()
 
                 if self.rank == 0 and self.counter % 100 == 0:
-                    columns = Columns(self.get_all_ranks(), equal=True, expand=True)
+                    columns = Columns(self.model.get_all_ranks(), equal=True, expand=True)
                     print(columns)
             self.counter += 1
 
-        print("losses", self.kloss.item(), self.lloss.item(), self.sloss.item())
+        #print("losses", self.kloss.item(), self.lloss.item(), self.sloss.item())
         return self.return_tuple(self.sloss, self.output)
 
     @torch.no_grad()
     def valid_step(self, model_inputs, labels):
         # TODO: fix me! need to repair this to perform with eval!
-        self.set_layer_case("s")
+        #self.model.set_layer_case("s")
         # self.run_preprocess(case="s")
-        sret = self.model(model_inputs)
+        sret = self.model(model_inputs, case="k")
         ls = self.criterion(sret, labels)
         return self.return_tuple(ls, sret)

@@ -208,8 +208,8 @@ def main():
     )
     print(dlrt_trainer.model)
     if args.rank == 0:
-        print(dlrt_trainer.get_all_ranks())
-        columns = Columns(dlrt_trainer.get_all_ranks(), equal=True, expand=True)
+        #print(dlrt_trainer.model.get_all_ranks())
+        columns = Columns(dlrt_trainer.model.get_all_ranks(), equal=True, expand=True)
         rprint(columns)
 
     # print(dlrt_trainer)
@@ -292,7 +292,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
     )
 
     # switch to train mode
-    trainer.train()
+    trainer.model.train()
     # rank = dist.get_rank()
     end = time.time()
     for i, (images, target) in enumerate(train_loader):
@@ -306,7 +306,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         output = trainer.train_step(images, target, adapt=False) #(epoch > 0) or (i > 100))
         #print(output.output.shape, target.shape)
         argmax = torch.argmax(output.output, dim=1).to(torch.float32)
-        print(argmax.mean().item(), argmax.max().item(), argmax.min().item(), argmax.std().item())
+        #print(argmax.mean().item(), argmax.max().item(), argmax.min().item(), argmax.std().item())
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output.output, target, topk=(1, 5))
         losses.update(output.loss.item(), images.size(0))
@@ -339,7 +339,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
                 # compute output
                 output = trainer.valid_step(images, target)
                 argmax = torch.argmax(output.output, dim=1).to(torch.float32)
-                print(f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}")
+                #print(f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}")
 
 
                 # measure accuracy and record loss
@@ -366,7 +366,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
     )
 
     # switch to evaluate mode
-    trainer.eval()
+    trainer.model.eval()
 
     run_validate(val_loader)
     if dist.is_initialized():

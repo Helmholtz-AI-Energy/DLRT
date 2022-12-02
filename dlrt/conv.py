@@ -720,32 +720,32 @@ class DLRTConv2dAdaptive(_ConvNd):
             + 1
         )
 
-        # eps = torch.finfo(inp_unf.dtype).eps
+        eps = torch.finfo(inp_unf.dtype).eps
         if self.train_case == "k":
             k, v = self.k[:, : self.low_rank], self.v[:, : self.low_rank]
-            # second = v @ k.T
-            # second[(second >= eps) & (second <= -eps)] *= 0
-            # out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
+            second = v @ k.T
+            second[(second >= eps) & (second <= -eps)] *= 0
+            out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
 
             # print([inp_unf.transpose(1, 2).shape, v.shape, k.T.shape], self.low_rank)
-            out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), v, k.T])
+            #out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), v, k.T])
         elif self.train_case == "l":
-            out_unf = torch.linalg.multi_dot(
-                [inp_unf.transpose(1, 2), self.l[:, : self.low_rank], self.u[:, : self.low_rank].T],
-            )
-            # second = self.l[:, : self.low_rank] @ self.u[:, : self.low_rank].T
-            # second[(second >= eps) & (second <= -eps)] *= 0
-            # out_unf = inp_unf.transpose(1, 2) @ second
+            #out_unf = torch.linalg.multi_dot(
+            #    [inp_unf.transpose(1, 2), self.l[:, : self.low_rank], self.u[:, : self.low_rank].T],
+            #)
+            second = self.l[:, : self.low_rank] @ self.u[:, : self.low_rank].T
+            second[(second >= eps) & (second <= -eps)] *= 0
+            out_unf = inp_unf.transpose(1, 2) @ second
         elif self.train_case == "s":
             u_hat = self.u_hat[:, : 2 * self.low_rank]
             s_hat = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank]
             v_hat = self.v_hat[:, : 2 * self.low_rank]
-            # second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
-            # second[(second >= eps) & (second <= -eps)] *= 0
-            # out_unf = inp_unf.transpose(1, 2) @ second
-            out_unf = torch.linalg.multi_dot(
-                [inp_unf.transpose(1, 2), v_hat, s_hat.T, u_hat.T],
-            )
+            second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
+            second[(second >= eps) & (second <= -eps)] *= 0
+            out_unf = inp_unf.transpose(1, 2) @ second
+            #out_unf = torch.linalg.multi_dot(
+            #    [inp_unf.transpose(1, 2), v_hat, s_hat.T, u_hat.T],
+            #)
         else:
             raise ValueError(f"Invalid step value: {self.step}")
 

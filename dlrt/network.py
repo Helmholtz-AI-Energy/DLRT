@@ -96,7 +96,7 @@ class DLRTNetwork(nn.Module):
                 # TODO: device checks??
             ).to(device=module.weight.device, dtype=module.weight.dtype)
             self.reset_layers = [module, name]
-        elif isinstance(module, nn.Conv2d):
+        elif isinstance(module, nn.Conv2d):  
             module_output = DLRTConv2d(
                 adaptive=self.adaptive,
                 low_rank_percent=self.rank_percent,
@@ -118,7 +118,7 @@ class DLRTNetwork(nn.Module):
 
         for name, child in module.named_children():
             # print(name, child.extra_repr())
-            module_output.add_module(name, self.replace_linear_layers(child, name, process_group))
+            module_output.add_module(name, self._replace_layers(child, name, process_group))
         del module
         return module_output
 
@@ -150,7 +150,7 @@ class DLRTNetwork(nn.Module):
     def set_layer_case(self, case):
         # set the training case of all DLRT layers (conv/linear)
         models = [self.model]
-        self.optimizer.zero_grad(set_to_none=True)
+        #self.optimizer.zero_grad(set_to_none=True)
         if case in ["k", "l"]:
             # turn off training on all layers
             self._set_training_all_params(network=self.model, totrain=False)
@@ -198,11 +198,11 @@ class DLRTNetwork(nn.Module):
         for module in self.model.children():
             module.train(mode)
         # TODO: fix me in DDP?? (do this on k/l/s models?)
-        self.model = self.model.train()
+        #self.model = self.model.train()
         return self
 
     def eval(self):
-        self.model = self.train(False)
+        self = self.train(False)
 
     def __run_command_on_dlrt_layers(self, module, command, kwargs=None):
         # NOTE: the command must be a member function of DLRTModule
