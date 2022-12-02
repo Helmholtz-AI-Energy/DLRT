@@ -179,6 +179,10 @@ class DLRTTrainer:
         for n, m in network.named_parameters():
             m.requires_grad = totrain
             m.training = totrain
+            try:
+                m.track_running_stats = totrain
+            except AttributeError:
+                pass
 
     def set_layer_case(self, case):
         models = [self.model]
@@ -213,15 +217,14 @@ class DLRTTrainer:
                 kwargs={"case": case},
             )
 
-    def run_preproces(self, case):
+    def run_preprocess(self, case):
         # prev: getattr(self, f"{case}model")
         self.__run_command_on_dlrt_layers(module=self.model, command=f"{case}_preprocess")
 
-    def run_postproces(self, case):
+    def run_postprocess(self, case):
         self.__run_command_on_dlrt_layers(module=self.model, command=f"{case}_postprocess")
 
     def run_rank_adaption(self):
-        # TODO: run rank adaption for all??
         self.__run_command_on_dlrt_layers(module=self.model, command="rank_adaption")
 
     def train(self):
@@ -275,15 +278,19 @@ class DLRTTrainer:
             # scaler.update()
         else:
             output = getattr(self, f"{case}model")(inputs)
-            # output = self.model(inputs)
+            #output = self.model(inputs)
+            #print(output)
             loss = self.criterion(output, labels)
+            #print(loss)
             loss.backward()
-            nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
+            #nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
             # self.optimizer.step()
+        #if torch.isnan(loss):
+        #print("after step", case)
+        #for n, m in getattr(self, f"{case}model").named_parameters():
+        #    if n.startswith("fc"):
+        #        print(n, f"{m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}")
         if torch.isnan(loss):
-            for n, m in getattr(self, f"{case}model").named_parameters():
-                if n.startswith("fc"):
-                    print(n, m)
             raise RuntimeError(f"loss is NaN in case {case}! {output}")
         class_loss = getattr(self, f"{case}loss")
         class_loss *= 0.0
@@ -304,11 +311,33 @@ class DLRTTrainer:
         self.optimizer.zero_grad()
         for case in ["k", "l"]:
             self.set_layer_case(case)
-            self.run_preproces(case)
+            self.run_preprocess(case)
+            requires_grad = []
+            #for n, m in self.kmodel.named_parameters():
+            #    if n.startswith("fc"):  #m.requires_grad:
+            #        requires_grad.append(f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}")  # , {m.grad}, {m}")
+            #if self.rank == 0: # and self.counter % 100 == 0:
+            #    columns = Columns(requires_grad, equal=True, expand=True)
+            #    console.rule(f"Before {case}")
+            #    console.print(columns)
             self._run_model(inputs, labels, case)
         self.optimizer.step()
+        self.optimizer.zero_grad()
+        self.run_postprocess("k")
+        self.run_postprocess("l")
         self.set_layer_case("s")
-        self.run_preproces(case="s")
+        self.run_preprocess(case="s")
+
+        #requires_grad = []
+        #for n, m in self.kmodel.named_parameters():
+        #    if n.startswith("fc"):  #m.requires_grad:
+        #        requires_grad.append(f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}")  # , {m.grad}, {m}")
+        #if self.rank == 0: # and self.counter % 100 == 0:
+        #    columns = Columns(requires_grad, equal=True, expand=True)
+        #    console.rule("Before s")
+        #    console.print(columns)
+
+        self._run_model(inputs, labels, "s")
         self.optimizer.step()
         if adapt and case == "s":
             if self.adaptive and adapt:
@@ -384,8 +413,9 @@ class DLRTTrainer:
 
     @torch.no_grad()
     def valid_step(self, model_inputs, labels):
+        # TODO: fix me! need to repair this to perform with eval!
         self.set_layer_case("s")
-        self.run_preproces(case="s")
+        #self.run_preprocess(case="s")
         sret = self.model(model_inputs)
         ls = self.criterion(sret, labels)
         return self.return_tuple(ls, sret)

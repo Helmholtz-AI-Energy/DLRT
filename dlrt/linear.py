@@ -656,7 +656,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
             self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
         else:
             self.register_parameter("bias", None)
-
+        
         if low_rank_percent is None:
             # set the max low_rank to be such that the
             roots = np.roots([1, in_features + out_features, in_features * out_features])
@@ -688,7 +688,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         assert init_method in ["random", "svd"], "init_method must be in ['random', 'svd']"
 
         _, s_ordered, _ = torch.linalg.svd(
-            torch.diag(torch.abs(torch.randn(2 * self.rmax, dtype=torch.float64))),
+            torch.diag(torch.abs(torch.randn(self.rmax, dtype=torch.float64))),
         )
         s_ordered = s_ordered.to(**factory_kwargs)
         U = torch.randn(self.out_features, self.rmax, dtype=torch.float64)
@@ -699,11 +699,11 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         self.s_hat = torch.nn.Parameter(torch.diag(s_ordered).to(**factory_kwargs))
         self.v = torch.nn.Parameter(V.to(**factory_kwargs), requires_grad=False)
         self.u_hat = torch.nn.Parameter(
-            torch.randn(self.out_features, 2 * self.rmax).to(**factory_kwargs),
+            torch.randn(self.out_features, self.rmax).to(**factory_kwargs),
             requires_grad=False,
         )
         self.v_hat = torch.nn.Parameter(
-            torch.randn(self.in_features, 2 * self.rmax).to(**factory_kwargs),
+            torch.randn(self.in_features, self.rmax).to(**factory_kwargs),
             requires_grad=False,
         )
         self.k = torch.nn.Parameter(torch.randn(self.out_features, self.rmax).to(**factory_kwargs))
@@ -711,13 +711,19 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
             torch.randn(self.in_features, self.rmax).to(**factory_kwargs),
         )
         self.n_hat = torch.nn.Parameter(
-            torch.randn(2 * self.rmax, self.rmax).to(**factory_kwargs),
+            torch.randn(self.rmax, self.low_rank).to(**factory_kwargs),
             requires_grad=False,
         )
         self.m_hat = torch.nn.Parameter(
-            torch.randn(2 * self.rmax, self.rmax).to(**factory_kwargs),
+            torch.randn(self.rmax, self.low_rank).to(**factory_kwargs),
             requires_grad=False,
         )
+
+        if self.bias is not None:
+            w = torch.linalg.multi_dot([self.l, self.s_hat.to(torch.float), self.k.T])  # should it be lt.T??
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(w)
+            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            nn.init.uniform_(self.bias, -bound, bound)
 
         # self.reset_parameters()
         self.train_case = "k"
@@ -769,19 +775,20 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
 
     def _change_params_requires_grad(self, requires_grad):
         self.k.requires_grad = requires_grad
-        self.s.requires_grad = requires_grad
+        self.s_hat.requires_grad = requires_grad
         self.l.requires_grad = requires_grad
         self.u.requires_grad = False  # requires_grad
-        self.unp1.requires_grad = False  # requires_grad
-        self.vt.requires_grad = False  # requires_grad
-        self.vtnp1.requires_grad = False  # requires_grad
-        self.n.requires_grad = False  # requires_grad
-        self.m.requires_grad = False  # requires_grad
+        self.u_hat.requires_grad = False  # requires_grad
+        self.v.requires_grad = False  # requires_grad
+        self.v_hat.requires_grad = False  # requires_grad
+        self.n_hat.requires_grad = False  # requires_grad
+        self.m_hat.requires_grad = False  # requires_grad
         self.bias.requires_grad = requires_grad
 
     def change_training_case(self, case):
         # switch -> if current train case is k/l, do post for
         self.train_case = case
+        self.training = True
 
     def cycle_training_case(self):
         # cycle between the cases -> to be used in the trainer/model class
@@ -798,7 +805,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
     def forward(self, input: Tensor) -> Tensor:
         # eps = torch.finfo(input.dtype).eps
 
-        if self.train_case == "k" or not self.training:
+        if self.train_case == "k":  # or not self.training:
             k, v = self.k[:, : self.low_rank], self.v[:, : self.low_rank]
             # slicing off eps:
             # intermediate = v @ k.T
@@ -872,7 +879,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
 
         # bias is trainable for the s step
         # set s -> (aux_N @ s) @ aux_M.T
-        self.s.requires_grad = True
+        self.s_hatrequires_grad = True
         self.bias.requires_grad = True
 
     @torch.no_grad()
@@ -886,8 +893,8 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         except torch._C._LinAlgError as e:
             print(f"LinAlgError during SGD -> {e}")
             return
-        v2 = vh2.T.to(self.s.dtype, non_blocking=True)
-        u2 = u2.to(self.s.dtype, non_blocking=True)
+        v2 = vh2.T.to(self.s_hat.dtype, non_blocking=True)
+        u2 = u2.to(self.s_hat.dtype, non_blocking=True)
         # d, u2, v2 = tf.linalg.svd(s_small)
 
         # absolute value treshold (try also relative one)
