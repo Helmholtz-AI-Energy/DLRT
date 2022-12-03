@@ -79,9 +79,6 @@ class DLRTNetwork(nn.Module):
             self.lmodel = self.model
             self.smodel = self.model
 
-        self.rank = 0 if not dist.is_initialized() else dist.get_rank()
-        # need to re-init the optimizer with the new DLRT parameters
-
     def _replace_layers(self, module, name=None, process_group=None):
         module_output = module
         # this will remove all the BatchNorm layers from the network
@@ -96,7 +93,9 @@ class DLRTNetwork(nn.Module):
                 # TODO: device checks??
             ).to(device=module.weight.device, dtype=module.weight.dtype)
             self.reset_layers = [module, name]
-        elif isinstance(module, nn.Conv2d):  
+        elif isinstance(module, nn.Conv2d):
+            # TODO: add warning that the replaced layers are slower than CUDnn (but that is
+            #  expected)
             module_output = DLRTConv2d(
                 adaptive=self.adaptive,
                 low_rank_percent=self.rank_percent,
@@ -150,7 +149,7 @@ class DLRTNetwork(nn.Module):
     def set_layer_case(self, case):
         # set the training case of all DLRT layers (conv/linear)
         models = [self.model]
-        #self.optimizer.zero_grad(set_to_none=True)
+        # self.optimizer.zero_grad(set_to_none=True)
         if case in ["k", "l"]:
             # turn off training on all layers
             self._set_training_all_params(network=self.model, totrain=False)
@@ -198,7 +197,7 @@ class DLRTNetwork(nn.Module):
         for module in self.model.children():
             module.train(mode)
         # TODO: fix me in DDP?? (do this on k/l/s models?)
-        #self.model = self.model.train()
+        # self.model = self.model.train()
         return self
 
     def eval(self):
