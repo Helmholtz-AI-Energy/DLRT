@@ -836,13 +836,16 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         self.bias.requires_grad = True
 
     @torch.no_grad()
-    def rank_adaption(self):
+    def rank_adaption(self, skip=False):
+        if skip:
+            self.u.set_(self.u_hat.data)
+            self.v.set_(self.v_hat.data)
         # 1) compute SVD of S
         # d=singular values, u2 = left singuar vecs, v2= right singular vecs
         # TODO: 64 bit?
-        s_small = self.s[: 2 * self.low_rank, : 2 * self.low_rank].clone().detach()
+        s_small = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank].clone().detach()
         try:
-            u2, sing, vh2 = torch.linalg.svd(s_small.to(torch.float64), full_matrices=False, driver="gesvdj")
+            u2, sing, vh2 = torch.linalg.svd(s_small.to(torch.float32), full_matrices=False, driver="gesvdj")
         except torch._C._LinAlgError as e:
             print(f"LinAlgError during SVD -> {e}")
             return

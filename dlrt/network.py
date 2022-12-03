@@ -187,8 +187,8 @@ class DLRTNetwork(nn.Module):
     def run_postprocess(self, case):
         self.__run_command_on_dlrt_layers(module=self.model, command=f"{case}_postprocess")
 
-    def run_rank_adaption(self):
-        self.__run_command_on_dlrt_layers(module=self.model, command="rank_adaption")
+    def run_rank_adaption(self, skip=False):
+        self.__run_command_on_dlrt_layers(module=self.model, command="rank_adaption", kwargs={"skip": skip})
 
     def train(self, mode: bool = True):
         if not isinstance(mode, bool):
