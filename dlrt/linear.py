@@ -757,8 +757,10 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
     # @torch.jit.script
     def forward(self, input: Tensor) -> Tensor:
         # eps = torch.finfo(input.dtype).eps
+        if self.training:
+            getattr(self, f"{self.train_case}_preprocess")()
 
-        if self.train_case == "k":  # or not self.training:
+        if self.train_case == "k" or not self.training:
             k, v = self.k[:, : self.low_rank], self.v[:, : self.low_rank]
             # slicing off eps:
             # intermediate = v @ k.T

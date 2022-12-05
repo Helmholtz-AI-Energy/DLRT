@@ -201,7 +201,7 @@ class DLRTNetwork(nn.Module):
         return self
 
     def eval(self):
-        self = self.train(False)
+        return self.train(False)
 
     def __run_command_on_dlrt_layers(self, module, command, kwargs=None):
         # NOTE: the command must be a member function of DLRTModule

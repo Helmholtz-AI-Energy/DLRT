@@ -690,6 +690,8 @@ class DLRTConv2dAdaptive(_ConvNd):
         phases for the steps 'K','L' and 'S' in order to be optimizable using dlrt.
 
         """
+        if self.training:
+            getattr(self, f"{self.train_case}_preprocess")()
 
         batch_size = input.shape[0]
 

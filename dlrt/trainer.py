@@ -85,7 +85,6 @@ class DLRTTrainer:
         self.counter = 0
         self.rank = 0 if not dist.is_initialized() else dist.get_rank()
 
-
     def _run_model(self, inputs, labels, case):
         self.optimizer.zero_grad(set_to_none=True)
 
@@ -124,11 +123,13 @@ class DLRTTrainer:
         self.optimizer.zero_grad()
         for case in ["k", "l"]:
             self.model.set_layer_case(case)
-            self.model.run_preprocess(case)
+            # self.model.run_preprocess(case)
             requires_grad = []
             for n, m in self.model.model.named_parameters():
-                if n.startswith("conv"):  #m.requires_grad:
-                    requires_grad.append(f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}")
+                if n.startswith("conv"):  # m.requires_grad:
+                    requires_grad.append(
+                        f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+                    )
             if self.rank == 0 and self.counter % 100 == 0:
                 columns = Columns(requires_grad, equal=True, expand=True)
                 console.rule(f"Before {case}")
@@ -139,8 +140,8 @@ class DLRTTrainer:
         self.model.run_postprocess("k")
         self.model.run_postprocess("l")
         self.model.set_layer_case("s")
-        self.model.run_preprocess(case="s")
-
+        # self.model.run_preprocess(case="s")
+        pass
         # requires_grad = []
         # for n, m in self.kmodel.named_parameters():
         #     if n.startswith("fc"):  #m.requires_grad:
@@ -161,13 +162,13 @@ class DLRTTrainer:
                 print(columns)
         self.counter += 1
 
-        #print("losses", self.kloss.item(), self.lloss.item(), self.sloss.item())
+        # print("losses", self.kloss.item(), self.lloss.item(), self.sloss.item())
         return self.return_tuple(self.sloss, self.output)
 
     @torch.no_grad()
     def valid_step(self, model_inputs, labels):
         # TODO: fix me! need to repair this to perform with eval!
-        #self.model.set_layer_case("s")
+        # self.model.set_layer_case("s")
         # self.run_preprocess(case="s")
         sret = self.model(model_inputs, case="k")
         ls = self.criterion(sret, labels)
