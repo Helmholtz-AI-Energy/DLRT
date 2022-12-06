@@ -90,7 +90,7 @@ class DLRTNetwork(nn.Module):
     def _replace_layers(self, module, name=None, process_group=None):
         module_output = module
         # this will remove all the BatchNorm layers from the network
-        if isinstance(module, nn.RNN): #nn.Linear):
+        if isinstance(module, nn.Linear):
             module_output = DLRTLinear(
                 in_features=module.in_features,
                 out_features=module.out_features,

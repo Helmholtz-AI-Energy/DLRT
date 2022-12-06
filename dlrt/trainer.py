@@ -111,7 +111,7 @@ class DLRTTrainer:
         self.output = output
         return loss, output
 
-    def train_step(self, inputs, labels, adapt=True):
+    def train_step(self, inputs, labels, skip_adapt=False):
         # TODO: remove this after debug...
         fact = {"device": inputs.device, "dtype": inputs.dtype}
         self.kloss, self.lloss, self.sloss = (
@@ -164,9 +164,9 @@ class DLRTTrainer:
         else:
             self.optimizer.step()
         if self.adaptive:
-            self.model.run_rank_adaption(adapt)
+            self.model.run_rank_adaption(skip_adapt)
 
-            if self.rank == 0 and self.counter % 100 == 0 and adapt:
+            if self.rank == 0 and self.counter % 100 == 0 and not skip_adapt:
                 columns = Columns(self.model.get_all_ranks(), equal=True, expand=True)
                 print(columns)
         self.counter += 1

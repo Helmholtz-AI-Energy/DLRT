@@ -303,7 +303,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
-        output = trainer.train_step(images, target, adapt=True)  # (epoch > 0) or (i > 100))
+        output = trainer.train_step(images, target, skip_adapt=(epoch > 0) or (i < 100))
         #print(output.output.shape, target.shape)
         argmax = torch.argmax(output.output, dim=1).to(torch.float32)
         print(argmax.mean().item(), argmax.max().item(), argmax.min().item(), argmax.std().item())

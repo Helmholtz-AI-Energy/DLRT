@@ -763,6 +763,7 @@ class DLRTConv2dAdaptive(_ConvNd):
                 l=self.l,
                 u=self.u,
                 s_hat=self.s_hat,
+                training=self.training,
             )
         else:  # s case
             out_unf = self.__conv_interior(
@@ -774,6 +775,7 @@ class DLRTConv2dAdaptive(_ConvNd):
                 l=self.l,
                 u=self.u_hat,
                 s_hat=self.s_hat,
+                training=self.training,
             )
 
         if self.bias is not None:
@@ -796,6 +798,7 @@ class DLRTConv2dAdaptive(_ConvNd):
         eps16: float = torch.finfo(torch.float16).eps,
         eps32: float = torch.finfo(torch.float32).eps,
         eps64: float = torch.finfo(torch.float64).eps,
+        training: bool = True,
     ) -> Tensor:
         # eps = self._get_tensor_eps(inp_unf)  #torch.finfo(inp_unf.dtype).eps
         if inp_unf.dtype == torch.float16:
@@ -807,12 +810,12 @@ class DLRTConv2dAdaptive(_ConvNd):
         else:
             raise RuntimeError(f"Expected x to be floating-point, got {inp_unf.dtype}")
 
-        if case == "k":
+        if case == "k" and training:
             k, v = k[:, :lr], v[:, :lr]
             second = v @ k.T
             #second[(second >= eps) & (second <= -eps)] *= 0
             out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
-        elif case == "l":
+        elif case == "l" and training:
             second = l[:, :lr] @ u[:, :lr].T
             #second[(second >= eps) & (second <= -eps)] *= 0
             out_unf = inp_unf.transpose(1, 2) @ second
