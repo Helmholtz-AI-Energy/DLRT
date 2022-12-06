@@ -808,7 +808,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         lr = self.low_rank
         lr2 = 2 * self.low_rank
         u_hat, _ = torch.linalg.qr(torch.hstack((self.k[:, :lr], self.u[:, :lr])))
-
+        print(u_hat.shape, lr, self.k.shape, self.u.shape, torch.hstack((self.k[:, :lr], self.u[:, :lr])).shape)
         self.u_hat[:, :lr2] = u_hat
         self.m_hat[:lr2, :lr] = self.u_hat[:, :lr2].T @ self.u[:, :lr]
 

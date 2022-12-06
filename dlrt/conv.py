@@ -683,6 +683,9 @@ class DLRTConv2dAdaptive(_ConvNd):
                 nn.init.uniform_(self.bias, -bound, bound)
             del weight
 
+    def train(self, mode=True):
+        self.training = mode
+
     # @torch.jit.script
     def forward(self, input: Tensor) -> Tensor:
         """
@@ -807,18 +810,18 @@ class DLRTConv2dAdaptive(_ConvNd):
         if case == "k":
             k, v = k[:, :lr], v[:, :lr]
             second = v @ k.T
-            second[(second >= eps) & (second <= -eps)] *= 0
+            #second[(second >= eps) & (second <= -eps)] *= 0
             out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
         elif case == "l":
             second = l[:, :lr] @ u[:, :lr].T
-            second[(second >= eps) & (second <= -eps)] *= 0
+            #second[(second >= eps) & (second <= -eps)] *= 0
             out_unf = inp_unf.transpose(1, 2) @ second
         else:  # case == "s":
             u_hat = u[:, : 2 * lr]  # NOTE: not checking that this is u_hat!!
             s_hat = s_hat[: 2 * lr, : 2 * lr]
             v_hat = v[:, : 2 * lr]  # NOTE: not checking that this is v_hat!!
             second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
-            second[(second >= eps) & (second <= -eps)] *= 0
+            #second[(second >= eps) & (second <= -eps)] *= 0
             out_unf = inp_unf.transpose(1, 2) @ second
         return out_unf
 

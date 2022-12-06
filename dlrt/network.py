@@ -57,6 +57,14 @@ class DLRTNetwork(nn.Module):
         self.rank = 0 if not dist.is_initialized() else dist.get_rank()
 
         self.model = self._replace_layers(self.model)
+        self.run_preprocess("k")
+        self.run_preprocess("l")
+        self.run_postprocess("k")
+        self.run_postprocess("l")
+        self.run_preprocess("s")
+        if adaptive:
+            self.run_rank_adaption()
+
         if dense_last_layer:
             self.model = self._reset_last_layer_to_dense(self.model)
         if init_ddp:
@@ -82,7 +90,7 @@ class DLRTNetwork(nn.Module):
     def _replace_layers(self, module, name=None, process_group=None):
         module_output = module
         # this will remove all the BatchNorm layers from the network
-        if isinstance(module, nn.Linear):
+        if isinstance(module, nn.RNN): #nn.Linear):
             module_output = DLRTLinear(
                 in_features=module.in_features,
                 out_features=module.out_features,
@@ -179,6 +187,8 @@ class DLRTNetwork(nn.Module):
                 command="change_training_case",
                 kwargs={"case": case},
             )
+            #self.__run_command_on_dlrt_layers(module=m, command="train")
+
 
     def run_preprocess(self, case):
         # prev: getattr(self, f"{case}model")
@@ -193,12 +203,25 @@ class DLRTNetwork(nn.Module):
     def train(self, mode: bool = True):
         if not isinstance(mode, bool):
             raise ValueError("training mode is expected to be boolean")
+        #self.model.training = mode
         self.model.training = mode
+        #self._train(self.model, mode)
         for module in self.model.children():
+            #print(module)
             module.train(mode)
+        # todo: recursse deeper...?
         # TODO: fix me in DDP?? (do this on k/l/s models?)
         # self.model = self.model.train()
         return self
+
+    def _train(self, module, mode=True):
+        module.train(mode)
+        #module.training = mode
+        for n, child in module.named_children():
+            #print(n, child.training)
+            #child.train(mode)
+            self._train(child)
+
 
     def eval(self):
         return self.train(False)

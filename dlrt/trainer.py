@@ -89,7 +89,7 @@ class DLRTTrainer:
         self.optimizer.zero_grad(set_to_none=True)
 
         if self.kscaler is not None:  # only test for kscaler -> rest are not always defined
-            scaler = getattr(self, f"{case}scaler")
+            scaler = self.kscaler  # getattr(self, f"{case}scaler")
             with torch.autocast(device_type="cuda", dtype=torch.float16):
                 output = self.model(inputs, case)
                 loss = self.criterion(output, labels)
@@ -125,17 +125,22 @@ class DLRTTrainer:
             self.model.set_layer_case(case)
             # self.model.run_preprocess(case)
             requires_grad = []
-            for n, m in self.model.model.named_parameters():
-                if n.startswith("conv"):  # m.requires_grad:
-                    requires_grad.append(
-                        f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-                    )
-            if self.rank == 0 and self.counter % 100 == 0:
-                columns = Columns(requires_grad, equal=True, expand=True)
-                console.rule(f"Before {case}")
-                console.print(columns)
             self._run_model(inputs, labels, case)
-        self.optimizer.step()
+            #for n, m in self.model.model.named_parameters():
+            #    if n.startswith("conv"):  # m.requires_grad:
+            #        requires_grad.append(
+            #            f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+            #        )
+            #if self.rank == 0 and self.counter % 100 == 0:
+            #    columns = Columns(requires_grad, equal=True, expand=True)
+            #    console.rule(f"After {case}")
+            #    console.print(columns)
+            #self._run_model(inputs, labels, case)
+        if self.kscaler is not None:
+            self.kscaler.step(self.optimizer)
+            self.kscaler.update()
+        else:
+            self.optimizer.step()
         self.optimizer.zero_grad()
         self.model.run_postprocess("k")
         self.model.run_postprocess("l")
@@ -153,7 +158,11 @@ class DLRTTrainer:
         #     console.print(columns)
 
         self._run_model(inputs, labels, "s")
-        self.optimizer.step()
+        if self.kscaler is not None:
+            self.kscaler.step(self.optimizer)
+            self.kscaler.update()
+        else:
+            self.optimizer.step()
         if self.adaptive:
             self.model.run_rank_adaption(adapt)
 
@@ -170,6 +179,6 @@ class DLRTTrainer:
         # TODO: fix me! need to repair this to perform with eval!
         # self.model.set_layer_case("s")
         # self.run_preprocess(case="s")
-        sret = self.model(model_inputs, case="k")
+        sret = self.model(model_inputs, case="s")
         ls = self.criterion(sret, labels)
         return self.return_tuple(ls, sret)

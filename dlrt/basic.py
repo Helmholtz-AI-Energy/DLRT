@@ -45,6 +45,7 @@ class DLRTModule(nn.Module):
         if case not in ["k", "l", "s"]:
             raise ValueError(f"case must be one of k, l, or s, not: {case}")
         self.train_case = case
+        self.training = True
 
     def cycle_training_case(self):
         # make sure that everything runs from k -> l -> s
