@@ -9,6 +9,7 @@ from enum import Enum
 
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
+import torch.functional as F
 import torch.nn as nn
 import torch.optim
 import torch.utils.data.distributed
@@ -26,6 +27,26 @@ import comm
 import datasets as dsets
 from rich import print as rprint
 from rich.columns import Columns
+
+
+class ToyNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc1 = nn.Linear(16 * 5 * 5, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = torch.flatten(x, 1)  # flatten all dimensions except batch
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
 
 
 model_names = sorted(
@@ -146,7 +167,7 @@ parser.add_argument("--dummy", action="store_true", help="use fake data to bench
 best_acc1 = 0
 
 
-def main():
+def main():  # noqa: C901
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -164,7 +185,9 @@ def main():
         args.rank = 0
 
     # create model
-    if args.pretrained:
+    if args.arch == "toynet":
+        model = ToyNet()
+    elif args.pretrained:
         print(f"=> using pre-trained model '{args.arch}'")
         model = models.__dict__[args.arch](pretrained=True)
     else:
@@ -190,25 +213,25 @@ def main():
     #     weight_decay=args.weight_decay
     # )
     # print("converting model to DLRT")
-    #print(model)
+    # print(model)
     dlrt_trainer = dlrt.DLRTTrainer(
         torch_model=model,
         optimizer_name="SGD",
         optimizer_kwargs={
             "lr": args.lr,
             "momentum": args.momentum,
-            #"weight_decay": args.weight_decay,
-            #'nesterov': True,
+            # "weight_decay": args.weight_decay,
+            # 'nesterov': True,
         },
         adaptive=True,
         criterion=nn.CrossEntropyLoss().to(device),
         init_ddp=dist.is_initialized(),
         mixed_precision=False,
-        rank_percent=0.9
+        rank_percent=0.9,
     )
     print(dlrt_trainer.model)
     if args.rank == 0:
-        #print(dlrt_trainer.model.get_all_ranks())
+        # print(dlrt_trainer.model.get_all_ranks())
         columns = Columns(dlrt_trainer.model.get_all_ranks(), equal=True, expand=True)
         rprint(columns)
 
@@ -276,7 +299,7 @@ def main():
         else:  # StelLR / others
             scheduler.step()
         if args.rank == 0:
-            print(dlrt_trainer.optimizer.param_groups[0]['lr'])
+            print(dlrt_trainer.optimizer.param_groups[0]["lr"])
 
 
 def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
@@ -304,9 +327,9 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         target = target.to(device, non_blocking=True)
 
         output = trainer.train_step(images, target, skip_adapt=(epoch < 0) and (i < 100))
-        #print(output.output.shape, target.shape)
+        # print(output.output.shape, target.shape)
         argmax = torch.argmax(output.output, dim=1).to(torch.float32)
-        #print("Argmax outputs", argmax.mean().item(), argmax.max().item(), argmax.min().item(), argmax.std().item())
+        # print("Argmax outputs", argmax.mean().item(), argmax.max().item(), argmax.min().item(), argmax.std().item())
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output.output, target, topk=(1, 5))
         losses.update(output.loss.item(), images.size(0))
@@ -320,7 +343,13 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         #    break
 
         if i % args.print_freq == 0:  # and rank == 0:
-            print("Argmax outputs", argmax.mean().item(), argmax.max().item(), argmax.min().item(), argmax.std().item())
+            print(
+                "Argmax outputs",
+                argmax.mean().item(),
+                argmax.max().item(),
+                argmax.min().item(),
+                argmax.std().item(),
+            )
             progress.display(i + 1)
     if dist.is_initialized():
         losses.all_reduce()
@@ -340,8 +369,9 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
                 # compute output
                 output = trainer.valid_step(images, target)
                 argmax = torch.argmax(output.output, dim=1).to(torch.float32)
-                print(f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}")
-
+                print(
+                    f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}",
+                )
 
                 # measure accuracy and record loss
                 acc1, acc5 = accuracy(output.output, target, topk=(1, 5))
@@ -389,7 +419,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
         run_validate(aux_val_loader, len(val_loader))
 
     progress.display_summary()
-    
+
     if dist.is_initialized():
         top1.all_reduce()
         top5.all_reduce()
