@@ -86,7 +86,7 @@ class DLRTTrainer:
         self.rank = 0 if not dist.is_initialized() else dist.get_rank()
 
     def _run_model(self, inputs, labels, case):
-        #self.optimizer.zero_grad(set_to_none=True)
+        # self.optimizer.zero_grad(set_to_none=True)
 
         if self.kscaler is not None:  # only test for kscaler -> rest are not always defined
             scaler = self.kscaler  # getattr(self, f"{case}scaler")
@@ -111,8 +111,91 @@ class DLRTTrainer:
         self.output = output
         return loss, output
 
+    def train_step_new(self, inputs, labels, skip_adapt=False):
+        fact = {"device": inputs.device, "dtype": inputs.dtype}
+        self.kloss, self.lloss, self.sloss = (
+            torch.tensor(0, **fact),
+            torch.tensor(0, **fact),
+            torch.tensor(0, **fact),
+        )
+        self.output = None
+        # k step
+        self.optimizer.zero_grad(set_to_none=True)
+        self.model.set_layer_case("k")
+        # k preprocess is in the forward step TODO: test speed there?
+        koutput = self.model(inputs, "k")
+        kloss = self.criterion(koutput, labels)
+        kloss.backward()
+
+        requires_grad = []
+        for n, m in self.model.model.named_parameters():
+            if n.startswith("conv"):  # m.requires_grad:
+                requires_grad.append(
+                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+                )
+        if self.rank == 0:  # and self.counter % 100 == 0:
+            columns = Columns(requires_grad, equal=True, expand=True)
+            console.rule("After k")
+            console.print(columns)
+
+        self.optimizer.step()
+        self.model.run_postprocess("k")
+        # ==== end k ==== start l ======
+        self.optimizer.zero_grad(set_to_none=True)
+        self.model.set_layer_case("l")
+        # l preprocess is in the forward step TODO: test speed there?
+        loutput = self.model(inputs, "l")
+        lloss = self.criterion(loutput, labels)
+        lloss.backward()
+
+        requires_grad = []
+        for n, m in self.model.model.named_parameters():
+            if n.startswith("conv"):  # m.requires_grad:
+                requires_grad.append(
+                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+                )
+        if self.rank == 0:  # and self.counter % 100 == 0:
+            columns = Columns(requires_grad, equal=True, expand=True)
+            console.rule("After l")
+            console.print(columns)
+
+        self.optimizer.step()
+        self.model.run_postprocess("l")
+        # === end l === start s ===
+        self.optimizer.zero_grad(set_to_none=True)
+        self.model.set_layer_case("s")
+        # l preprocess is in the forward step TODO: test speed there?
+        soutput = self.model(inputs, "s")
+        sloss = self.criterion(soutput, labels)
+        sloss.backward()
+
+        requires_grad = []
+        for n, m in self.model.model.named_parameters():
+            if n.startswith("conv"):  # m.requires_grad:
+                requires_grad.append(
+                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+                )
+        if self.rank == 0:  # and self.counter % 100 == 0:
+            columns = Columns(requires_grad, equal=True, expand=True)
+            console.rule("After s")
+            console.print(columns)
+
+        self.optimizer.step()
+        # s postprocess is rank adaptation
+        if self.adaptive:
+            self.model.run_rank_adaption(skip_adapt)
+
+            if self.rank == 0 and self.counter % 100 == 0 and not skip_adapt:
+                console.rule("After rank adaptation")
+                columns = Columns(self.model.get_all_ranks(), equal=True, expand=True)
+                console.print(columns)
+
+        self.counter += 1
+
+        return self.return_tuple(sloss, soutput)
+
     def train_step(self, inputs, labels, skip_adapt=False):
-        #console.rule("top of train step")
+        # console.rule("top of train step")
         # TODO: remove this after debug...
         fact = {"device": inputs.device, "dtype": inputs.dtype}
         self.kloss, self.lloss, self.sloss = (
@@ -127,16 +210,16 @@ class DLRTTrainer:
             # self.model.run_preprocess(case)
             requires_grad = []
             self._run_model(inputs, labels, case)
-            #for n, m in self.model.model.named_parameters():
+            # for n, m in self.model.model.named_parameters():
             #    if n.startswith("conv"):  # m.requires_grad:
             #        requires_grad.append(
             #            f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
             #        )
-            #if self.rank == 0:# and self.counter % 100 == 0:
+            # if self.rank == 0:# and self.counter % 100 == 0:
             #    columns = Columns(requires_grad, equal=True, expand=True)
             #    console.rule(f"After {case}")
             #    console.print(columns)
-            #self._run_model(inputs, labels, case)
+            # self._run_model(inputs, labels, case)
         if self.kscaler is not None:
             self.kscaler.step(self.optimizer)
             self.kscaler.update()
@@ -153,17 +236,17 @@ class DLRTTrainer:
                 requires_grad.append(
                     f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
                 )
-        if self.rank == 0:# and self.counter % 100 == 0:
+        if self.rank == 0:  # and self.counter % 100 == 0:
             columns = Columns(requires_grad, equal=True, expand=True)
-            #console.rule("After k/l steps")
-            #console.print(columns)
+            # console.rule("After k/l steps")
+            # console.print(columns)
 
         self.model.set_layer_case("s")
 
         self.optimizer.zero_grad()
         #            "{m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}"
         #        )
-        #if self.rank == 0: # and self.counter % 100 == 0:
+        # if self.rank == 0: # and self.counter % 100 == 0:
         #    columns = Columns(requires_grad, equal=True, expand=True)
         #    console.rule("Before s")
         #    console.print(columns)
@@ -190,13 +273,13 @@ class DLRTTrainer:
                 requires_grad.append(
                     f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
                 )
-        if self.rank == 0:# and self.counter % 100 == 0:
+        if self.rank == 0:  # and self.counter % 100 == 0:
             columns = Columns(requires_grad, equal=True, expand=True)
-            #console.rule(f"After s train step")
-            #console.print(columns)
+            # console.rule(f"After s train step")
+            # console.print(columns)
 
         # print("losses", self.kloss.item(), self.lloss.item(), self.sloss.item())
-        #console.rule("end of train step")
+        # console.rule("end of train step")
         return self.return_tuple(self.sloss, self.output)
 
     @torch.no_grad()

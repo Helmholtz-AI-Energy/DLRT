@@ -9,8 +9,8 @@ from enum import Enum
 
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
-import torch.nn.functional as F
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim
 import torch.utils.data.distributed
 import torchvision.models as models
@@ -68,7 +68,7 @@ parser.add_argument(
     "--arch",
     metavar="ARCH",
     default="resnet50",
-    #choices=model_names,
+    # choices=model_names,
     help="model architecture: " + " | ".join(model_names) + " (default: resnet18)",
 )
 parser.add_argument(
@@ -326,7 +326,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
-        output = trainer.train_step(images, target, skip_adapt=(epoch < 0) and (i < 100))
+        output = trainer.train_step_new(images, target, skip_adapt=False)
         # print(output.output.shape, target.shape)
         argmax = torch.argmax(output.output, dim=1).to(torch.float32)
         # print("Argmax outputs", argmax.mean().item(), argmax.max().item(), argmax.min().item(), argmax.std().item())
