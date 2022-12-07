@@ -9,7 +9,7 @@ from enum import Enum
 
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
-import torch.functional as F
+import torch.nn.functional as F
 import torch.nn as nn
 import torch.optim
 import torch.utils.data.distributed
@@ -68,7 +68,7 @@ parser.add_argument(
     "--arch",
     metavar="ARCH",
     default="resnet50",
-    choices=model_names,
+    #choices=model_names,
     help="model architecture: " + " | ".join(model_names) + " (default: resnet18)",
 )
 parser.add_argument(

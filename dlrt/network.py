@@ -94,7 +94,7 @@ class DLRTNetwork(nn.Module):
             module_output = DLRTLinear(
                 in_features=module.in_features,
                 out_features=module.out_features,
-                bias=module.bias,
+                bias=module.bias is not None,
                 adaptive=self.adaptive,
                 low_rank_percent=self.rank_percent,
                 eps_adapt=self.epsilon["linear"],
@@ -114,7 +114,7 @@ class DLRTNetwork(nn.Module):
                 padding=module.padding,
                 dilation=module.dilation,
                 groups=module.groups,
-                bias=module.bias,
+                bias=module.bias is not None,
                 padding_mode=module.padding_mode,
                 eps_adapt=self.epsilon["conv2d"],
             ).to(device=module.weight.device, dtype=module.weight.dtype)

@@ -142,6 +142,7 @@ class DLRTTrainer:
             self.kscaler.update()
         else:
             self.optimizer.step()
+        self.optimizer.zero_grad()
 
         self.model.run_postprocess("k")
         self.model.run_postprocess("l")
