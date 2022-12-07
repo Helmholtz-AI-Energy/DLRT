@@ -86,7 +86,7 @@ class DLRTTrainer:
         self.rank = 0 if not dist.is_initialized() else dist.get_rank()
 
     def _run_model(self, inputs, labels, case):
-        self.optimizer.zero_grad(set_to_none=True)
+        #self.optimizer.zero_grad(set_to_none=True)
 
         if self.kscaler is not None:  # only test for kscaler -> rest are not always defined
             scaler = self.kscaler  # getattr(self, f"{case}scaler")
@@ -112,6 +112,7 @@ class DLRTTrainer:
         return loss, output
 
     def train_step(self, inputs, labels, skip_adapt=False):
+        #console.rule("top of train step")
         # TODO: remove this after debug...
         fact = {"device": inputs.device, "dtype": inputs.dtype}
         self.kloss, self.lloss, self.sloss = (
@@ -131,7 +132,7 @@ class DLRTTrainer:
             #        requires_grad.append(
             #            f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
             #        )
-            #if self.rank == 0 and self.counter % 100 == 0:
+            #if self.rank == 0:# and self.counter % 100 == 0:
             #    columns = Columns(requires_grad, equal=True, expand=True)
             #    console.rule(f"After {case}")
             #    console.print(columns)
@@ -141,21 +142,30 @@ class DLRTTrainer:
             self.kscaler.update()
         else:
             self.optimizer.step()
-        self.optimizer.zero_grad()
+
         self.model.run_postprocess("k")
         self.model.run_postprocess("l")
+
+        requires_grad = []
+        for n, m in self.model.model.named_parameters():
+            if n.startswith("fc"):  # m.requires_grad:
+                requires_grad.append(
+                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+                )
+        if self.rank == 0:# and self.counter % 100 == 0:
+            columns = Columns(requires_grad, equal=True, expand=True)
+            #console.rule("After k/l steps")
+            #console.print(columns)
+
         self.model.set_layer_case("s")
-        # self.model.run_preprocess(case="s")
-        pass
-        # requires_grad = []
-        # for n, m in self.kmodel.named_parameters():
-        #     if n.startswith("fc"):  #m.requires_grad:
-        #         requires_grad.append(f"{n}, {m.max().item():.4f}, {m.min().item():.4f},
-        #         {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}")
-        # if self.rank == 0: # and self.counter % 100 == 0:
-        #     columns = Columns(requires_grad, equal=True, expand=True)
-        #     console.rule("Before s")
-        #     console.print(columns)
+
+        self.optimizer.zero_grad()
+        #            "{m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}"
+        #        )
+        #if self.rank == 0: # and self.counter % 100 == 0:
+        #    columns = Columns(requires_grad, equal=True, expand=True)
+        #    console.rule("Before s")
+        #    console.print(columns)
 
         self._run_model(inputs, labels, "s")
         if self.kscaler is not None:
@@ -163,15 +173,29 @@ class DLRTTrainer:
             self.kscaler.update()
         else:
             self.optimizer.step()
+
         if self.adaptive:
             self.model.run_rank_adaption(skip_adapt)
 
             if self.rank == 0 and self.counter % 100 == 0 and not skip_adapt:
+                console.rule("After rank adaptation")
                 columns = Columns(self.model.get_all_ranks(), equal=True, expand=True)
-                print(columns)
+                console.print(columns)
+
         self.counter += 1
+        requires_grad = []
+        for n, m in self.model.model.named_parameters():
+            if n.startswith("fc"):  # m.requires_grad:
+                requires_grad.append(
+                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+                )
+        if self.rank == 0:# and self.counter % 100 == 0:
+            columns = Columns(requires_grad, equal=True, expand=True)
+            #console.rule(f"After s train step")
+            #console.print(columns)
 
         # print("losses", self.kloss.item(), self.lloss.item(), self.sloss.item())
+        #console.rule("end of train step")
         return self.return_tuple(self.sloss, self.output)
 
     @torch.no_grad()

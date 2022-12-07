@@ -4,9 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 ### #SBATCH --gpus-per-task=1
-#SBATCH --time=00:05:00
+#SBATCH --time=01:00:00
 #SBATCH --job-name=dlrt-ddp
-#SBATCH --partition=dev_accelerated
+#SBATCH --partition=accelerated
 #SBATCH --account=haicore-project-scc
 #SBATCH --gres=gpu:1
 #SBATCH --output="/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/logs/slurm-%j"
@@ -68,4 +68,4 @@ echo "config: ${CONFIG}"
 
 srun "${SRUN_PARAMS[@]}" singularity exec --nv \
   --bind "${DATA_PREFIX}","${SCRIPT_DIR}","/scratch","/tmp","/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/dlrt/":"/opt/conda/lib/python3.8/site-packages/dlrt/" "${SINGULARITY_FILE}" \
-    bash -c "python -u resnet.py --data=${DATA_PREFIX} -b 256 -p 10 --lr 0.1 --momentum 0.10 --wd 0.000001 -a resnet18"
+    bash -c "python -u resnet.py --data=${DATA_PREFIX} -b 512 -p 10 --lr 0.01 --momentum 0.1 --wd 0.000001 -a resnet18"

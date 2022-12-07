@@ -780,7 +780,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
 
     # @torch.jit.script
     def forward(self, input: Tensor) -> Tensor:
-        console.rule(f"forward: {self.train_case}, training: {self.training}")
+        #console.rule(f"forward: {self.train_case}, training: {self.training}")
         #self.print_shapes()
         eps = torch.finfo(input.dtype).eps
         if self.training:
@@ -814,7 +814,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
             #ret = input @ intermediate
             ret = torch.linalg.multi_dot([input, v_hat, s_hat, u_hat])
         #if not self.training:
-        print(ret.mean().item(), ret.min().item(), ret.max().item(), ret.std().item())
+        #print(f"end linear: {ret.mean().item():.5f} {ret.min().item():.5f} {ret.max().item():.5f} {ret.std().item():.5f}")
         return ret if self.bias is None else ret + self.bias
 
     @torch.no_grad()
@@ -860,6 +860,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
 
     @torch.no_grad()
     def s_preprocess(self):
+        #print("beginning of s prepro")
         self._change_params_requires_grad(False)
 
         lr = self.low_rank
@@ -874,6 +875,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         # set s -> (aux_N @ s) @ aux_M.T
         self.s_hat.requires_grad = True
         self.bias.requires_grad = True
+        #self._change_params_requires_grad(True)
         #console.rule("after s pre")
         #self.print_shapes()
 

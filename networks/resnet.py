@@ -197,8 +197,8 @@ def main():
         optimizer_kwargs={
             "lr": args.lr,
             "momentum": args.momentum,
-            "weight_decay": args.weight_decay,
-            'nesterov': True,
+            #"weight_decay": args.weight_decay,
+            #'nesterov': True,
         },
         adaptive=True,
         criterion=nn.CrossEntropyLoss().to(device),
@@ -303,10 +303,10 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
-        output = trainer.train_step(images, target, skip_adapt=(epoch > 0) or (i < 100))
+        output = trainer.train_step(images, target, skip_adapt=(epoch < 0) and (i < 100))
         #print(output.output.shape, target.shape)
         argmax = torch.argmax(output.output, dim=1).to(torch.float32)
-        print(argmax.mean().item(), argmax.max().item(), argmax.min().item(), argmax.std().item())
+        #print("Argmax outputs", argmax.mean().item(), argmax.max().item(), argmax.min().item(), argmax.std().item())
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output.output, target, topk=(1, 5))
         losses.update(output.loss.item(), images.size(0))
@@ -320,6 +320,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         #    break
 
         if i % args.print_freq == 0:  # and rank == 0:
+            print("Argmax outputs", argmax.mean().item(), argmax.max().item(), argmax.min().item(), argmax.std().item())
             progress.display(i + 1)
     if dist.is_initialized():
         losses.all_reduce()
