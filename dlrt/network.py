@@ -57,13 +57,13 @@ class DLRTNetwork(nn.Module):
         self.rank = 0 if not dist.is_initialized() else dist.get_rank()
 
         self.model = self._replace_layers(self.model)
-        self.run_preprocess("k")
-        self.run_preprocess("l")
-        self.run_postprocess("k")
-        self.run_postprocess("l")
-        self.run_preprocess("s")
-        if adaptive:
-            self.run_rank_adaption()
+        #self.run_preprocess("k")
+        #self.run_preprocess("l")
+        #self.run_postprocess("k")
+        #self.run_postprocess("l")
+        #self.run_preprocess("s")
+        #if adaptive:
+        #    self.run_rank_adaption()
 
         if dense_last_layer:
             self.model = self._reset_last_layer_to_dense(self.model)
@@ -90,7 +90,7 @@ class DLRTNetwork(nn.Module):
     def _replace_layers(self, module, name=None, process_group=None):
         module_output = module
         # this will remove all the BatchNorm layers from the network
-        if isinstance(module, nn.Linear):
+        if isinstance(module, nn.RNN): #nn.Linear):
             module_output = DLRTLinear(
                 in_features=module.in_features,
                 out_features=module.out_features,
@@ -258,4 +258,5 @@ class DLRTNetwork(nn.Module):
         return out_ranks
 
     def __call__(self, inputs, case):
+        #return self.model(inputs)
         return getattr(self, f"{case}model")(inputs)

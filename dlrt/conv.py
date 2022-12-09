@@ -725,35 +725,39 @@ class DLRTConv2dAdaptive(_ConvNd):
             + 1
         )
 
-        # # eps = torch.finfo(inp_unf.dtype).eps
-        # if self.train_case == "k":
-        #     k, v = self.k[:, : self.low_rank], self.v[:, : self.low_rank]
-        #     # second = v @ k.T
-        #     # second[(second >= eps) & (second <= -eps)] *= 0
-        #     # out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
-        #
-        #     # print([inp_unf.transpose(1, 2).shape, v.shape, k.T.shape], self.low_rank)
-        #     out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), v, k.T])
-        # elif self.train_case == "l":
-        #     out_unf = torch.linalg.multi_dot(
-        #         [inp_unf.transpose(1, 2), self.l[:, : self.low_rank], self.u[:, : self.low_rank].T],
-        #     )
-        #     # second = self.l[:, : self.low_rank] @ self.u[:, : self.low_rank].T
-        #     # second[(second >= eps) & (second <= -eps)] *= 0
-        #     # out_unf = inp_unf.transpose(1, 2) @ second
-        # elif self.train_case == "s":
-        #     u_hat = self.u_hat[:, : 2 * self.low_rank]
-        #     s_hat = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank]
-        #     v_hat = self.v_hat[:, : 2 * self.low_rank]
-        #     # second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
-        #     # second[(second >= eps) & (second <= -eps)] *= 0
-        #     # out_unf = inp_unf.transpose(1, 2) @ second
-        #     out_unf = torch.linalg.multi_dot(
-        #         [inp_unf.transpose(1, 2), v_hat, s_hat.T, u_hat.T],
-        #     )
-        # else:
-        #     raise ValueError(f"Invalid step value: {self.step}")
-        if self.train_case in ["k", "l"]:
+        eps = torch.finfo(inp_unf.dtype).eps
+        if self.train_case == "k":
+            #print('k step')
+            k, v = self.k[:, : self.low_rank], self.v[:, : self.low_rank]
+            second = v @ k.T
+            #second[(second >= eps) & (second <= -eps)] *= 0
+            out_unf = inp_unf.transpose(1, 2) @ second  # @ v @ k.T
+            # print([inp_unf.transpose(1, 2).shape, v.shape, k.T.shape], self.low_rank)
+            #out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), v, k.T])
+            #out_unf = inp_unf.transpose(1, 2) @ v @ k.T
+        elif self.train_case == "l":
+            #print('l step')
+            #out_unf = torch.linalg.multi_dot(
+            #    [inp_unf.transpose(1, 2), self.l[:, : self.low_rank], self.u[:, : self.low_rank].T],
+            #)
+            second = self.l[:, : self.low_rank] @ self.u[:, : self.low_rank].T
+            #second[(second >= eps) & (second <= -eps)] *= 0
+            out_unf = inp_unf.transpose(1, 2) @ second
+        elif self.train_case == "s" or not self.training:
+            #print('s step')
+            u_hat = self.u_hat[:, : 2 * self.low_rank]
+            s_hat = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank]
+            v_hat = self.v_hat[:, : 2 * self.low_rank]
+            second = v_hat @ s_hat.T @ u_hat.T
+            #second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
+            #second[(second >= eps) & (second <= -eps)] *= 0
+            out_unf = inp_unf.transpose(1, 2) @ second
+            #out_unf = torch.linalg.multi_dot(
+            #    [inp_unf.transpose(1, 2), v_hat, s_hat.T, u_hat.T],
+            #)
+        else:
+            raise ValueError(f"Invalid step value: {self.step}")
+        if self.train_case in ["1k", "1l"]:
             out_unf = self.__conv_interior(
                 inp_unf,
                 case=self.train_case,
@@ -765,7 +769,7 @@ class DLRTConv2dAdaptive(_ConvNd):
                 s_hat=self.s_hat,
                 training=self.training,
             )
-        else:  # s case
+        elif self.train_case == "s1":  # s case
             out_unf = self.__conv_interior(
                 inp_unf,
                 case=self.train_case,
@@ -846,6 +850,7 @@ class DLRTConv2dAdaptive(_ConvNd):
         # k prepro
         # k -> aux_U @ s
         k = self.u[:, : self.low_rank] @ self.s_hat[: self.low_rank, : self.low_rank]
+        self.k.zero_()
         self.k[:, : self.low_rank] = k
         self.k.requires_grad = True
 
@@ -853,6 +858,7 @@ class DLRTConv2dAdaptive(_ConvNd):
     def l_preprocess(self):
         self._change_params_requires_grad(False)
         L = self.v[:, : self.low_rank] @ self.s_hat[: self.low_rank, : self.low_rank].T
+        self.l.zero_()
         self.l[:, : self.low_rank] = L
         self.l.requires_grad = True
 
@@ -861,7 +867,8 @@ class DLRTConv2dAdaptive(_ConvNd):
         lr = self.low_rank
         lr2 = 2 * self.low_rank
         u_hat, _ = torch.linalg.qr(torch.hstack((self.k[:, :lr], self.u[:, :lr])))
-
+        self.u_hat.zero_()
+        self.m_hat.zero_()
         self.u_hat[:, :lr2] = u_hat
         self.m_hat[:lr2, :lr] = self.u_hat[:, :lr2].T @ self.u[:, :lr]
 
@@ -870,6 +877,8 @@ class DLRTConv2dAdaptive(_ConvNd):
         lr = self.low_rank
         lr2 = 2 * self.low_rank
         V_hat, _ = torch.linalg.qr(torch.hstack((self.l[:, :lr], self.v[:, :lr])))
+        self.v_hat.zero_()
+        self.n_hat.zero_()
         self.v_hat[:, :lr2] = V_hat
         self.n_hat[:lr2, :lr] = self.v_hat[:, :lr2].T @ self.v[:, :lr]
 
@@ -883,6 +892,7 @@ class DLRTConv2dAdaptive(_ConvNd):
         s = torch.linalg.multi_dot(
             [self.m_hat[:lr2, :lr], self.s_hat[:lr, :lr], self.n_hat[: 2 * lr, :lr].T],
         )
+        self.s_hat.zero_()
         self.s_hat[:lr2, :lr2] = s
 
         # bias is trainable for the s step
@@ -928,11 +938,13 @@ class DLRTConv2dAdaptive(_ConvNd):
 
         # new
         rmax = max([min([rmax, self.rmax]), 2])
-
+        self.s_hat.zero_()
         self.s_hat[:rmax, :rmax] = torch.diag(sing[:rmax]).to(
             device=self.s_hat.device,
             dtype=self.s_hat.dtype,
         )
+        self.u.zero_()
+        self.v.zero_()
         self.u[:, :rmax] = self.u_hat[:, : 2 * self.low_rank] @ u2[:, :rmax]
         self.v[:, :rmax] = self.v_hat[:, : 2 * self.low_rank] @ (v2[:, :rmax])
 

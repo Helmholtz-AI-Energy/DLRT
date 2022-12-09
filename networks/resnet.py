@@ -28,6 +28,10 @@ import datasets as dsets
 from rich import print as rprint
 from rich.columns import Columns
 
+from rich.console import Console
+console = Console(width=120)
+
+
 
 class ToyNet(nn.Module):
     def __init__(self):
@@ -326,21 +330,28 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
-        output = trainer.train_step_new(images, target, skip_adapt=False)
+        koutput, loutput, soutput = trainer.train_step_new(images, target, skip_adapt=True)
         # print(output.output.shape, target.shape)
-        argmax = torch.argmax(output.output, dim=1).to(torch.float32)
-        # print("Argmax outputs", argmax.mean().item(), argmax.max().item(), argmax.min().item(), argmax.std().item())
+        argmax = torch.argmax(koutput.output, dim=1).to(torch.float32)
+        console.rule(f"train step {i}")
+        console.print(f"Argmax outputs k: {argmax.mean().item():.5f}, {argmax.max().item():.5f}, {argmax.min().item():.5f}, {argmax.std().item():.5f}")
+        argmax = torch.argmax(loutput.output, dim=1).to(torch.float32)
+        console.print(f"Argmax outputs l: {argmax.mean().item():.5f}, {argmax.max().item():.5f}, {argmax.min().item():.5f}, {argmax.std().item():.5f}")
+        argmax = torch.argmax(soutput.output, dim=1).to(torch.float32)
+        console.print(f"Argmax outputs s: {argmax.mean().item():.5f}, {argmax.max().item():.5f}, {argmax.min().item():.5f}, {argmax.std().item():.5f}")
         # measure accuracy and record loss
-        acc1, acc5 = accuracy(output.output, target, topk=(1, 5))
-        losses.update(output.loss.item(), images.size(0))
+        acc1, acc5 = accuracy(soutput.output, target, topk=(1, 5))
+        losses.update(soutput.loss.item(), images.size(0))
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-        # if i == 2:
+        #if i == 2:
+        #    raise RuntimeError("asdf")
         #    break
+
 
         if i % args.print_freq == 0:  # and rank == 0:
             print(

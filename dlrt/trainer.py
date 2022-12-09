@@ -119,68 +119,77 @@ class DLRTTrainer:
             torch.tensor(0, **fact),
         )
         self.output = None
-        # k step
-        self.optimizer.zero_grad(set_to_none=True)
+        #print("all models true?", self.model.model == self.model.kmodel, self.model.kmodel == self.model.lmodel, self.model.smodel == self.model.kmodel)
+        # ===== k step ====================
+        #console.rule("k")
         self.model.set_layer_case("k")
+        self.optimizer.zero_grad(set_to_none=True)
         # k preprocess is in the forward step TODO: test speed there?
         koutput = self.model(inputs, "k")
         kloss = self.criterion(koutput, labels)
         kloss.backward()
 
+        self.optimizer.step()
+        self.model.run_postprocess("k")
+
         requires_grad = []
         for n, m in self.model.model.named_parameters():
-            if n.startswith("conv"):  # m.requires_grad:
-                requires_grad.append(
+            #if n.startswith("conv1"):  # m.requires_grad:
+            requires_grad.append(
                     f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
                 )
         if self.rank == 0:  # and self.counter % 100 == 0:
             columns = Columns(requires_grad, equal=True, expand=True)
-            console.rule("After k")
-            console.print(columns)
-
-        self.optimizer.step()
-        self.model.run_postprocess("k")
+            #console.rule("after k")
+            #console.print(columns)
+        #self.optimizer.step()
+        #self.model.run_postprocess("k")
         # ==== end k ==== start l ======
-        self.optimizer.zero_grad(set_to_none=True)
+        #console.rule("l")
         self.model.set_layer_case("l")
+        self.optimizer.zero_grad(set_to_none=True)
         # l preprocess is in the forward step TODO: test speed there?
         loutput = self.model(inputs, "l")
         lloss = self.criterion(loutput, labels)
         lloss.backward()
 
-        requires_grad = []
-        for n, m in self.model.model.named_parameters():
-            if n.startswith("conv"):  # m.requires_grad:
-                requires_grad.append(
-                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-                )
-        if self.rank == 0:  # and self.counter % 100 == 0:
-            columns = Columns(requires_grad, equal=True, expand=True)
-            console.rule("After l")
-            console.print(columns)
-
         self.optimizer.step()
         self.model.run_postprocess("l")
+
+        requires_grad = []
+        for n, m in self.model.model.named_parameters():
+            #if n.startswith("conv1"):  # m.requires_grad:
+            requires_grad.append(
+                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+            )
+        if self.rank == 0:  # and self.counter % 100 == 0:
+            columns = Columns(requires_grad, equal=True, expand=True)
+            #console.rule("Before s")
+            #console.print(columns)
+        self.optimizer.step()
+        self.model.run_postprocess("l")
+
         # === end l === start s ===
-        self.optimizer.zero_grad(set_to_none=True)
+        #console.rule("s")
         self.model.set_layer_case("s")
+        self.optimizer.zero_grad(set_to_none=False)
         # l preprocess is in the forward step TODO: test speed there?
         soutput = self.model(inputs, "s")
         sloss = self.criterion(soutput, labels)
         sloss.backward()
+        self.optimizer.step()
 
         requires_grad = []
         for n, m in self.model.model.named_parameters():
-            if n.startswith("conv"):  # m.requires_grad:
-                requires_grad.append(
+            #if n.startswith("conv1"):  # m.requires_grad:
+            requires_grad.append(
                     f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
                 )
         if self.rank == 0:  # and self.counter % 100 == 0:
             columns = Columns(requires_grad, equal=True, expand=True)
-            console.rule("After s")
-            console.print(columns)
+            #console.rule("After s")
+            #console.print(columns)
 
-        self.optimizer.step()
         # s postprocess is rank adaptation
         if self.adaptive:
             self.model.run_rank_adaption(skip_adapt)
@@ -192,7 +201,7 @@ class DLRTTrainer:
 
         self.counter += 1
 
-        return self.return_tuple(sloss, soutput)
+        return self.return_tuple(kloss, koutput), self.return_tuple(lloss, loutput), self.return_tuple(sloss, soutput)
 
     def train_step(self, inputs, labels, skip_adapt=False):
         # console.rule("top of train step")
@@ -287,6 +296,7 @@ class DLRTTrainer:
         # TODO: fix me! need to repair this to perform with eval!
         # self.model.set_layer_case("s")
         # self.run_preprocess(case="s")
-        sret = self.model(model_inputs, case="s")
+        console.rule("valid step")
+        sret = self.model(model_inputs, 's')
         ls = self.criterion(sret, labels)
         return self.return_tuple(ls, sret)
