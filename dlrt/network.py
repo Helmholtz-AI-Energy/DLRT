@@ -57,13 +57,13 @@ class DLRTNetwork(nn.Module):
         self.rank = 0 if not dist.is_initialized() else dist.get_rank()
 
         self.model = self._replace_layers(self.model)
-        #self.run_preprocess("k")
-        #self.run_preprocess("l")
-        #self.run_postprocess("k")
-        #self.run_postprocess("l")
-        #self.run_preprocess("s")
-        #if adaptive:
-        #    self.run_rank_adaption()
+        self.run_preprocess("k")
+        self.run_preprocess("l")
+        self.run_postprocess("k")
+        self.run_postprocess("l")
+        self.run_preprocess("s")
+        if adaptive:
+           self.run_rank_adaption()
 
         if dense_last_layer:
             self.model = self._reset_last_layer_to_dense(self.model)
@@ -90,7 +90,8 @@ class DLRTNetwork(nn.Module):
     def _replace_layers(self, module, name=None, process_group=None):
         module_output = module
         # this will remove all the BatchNorm layers from the network
-        if isinstance(module, nn.RNN): #nn.Linear):
+        # TODO: add warning that the replaced layers are slower than CUDnn (but that is expected)
+        if isinstance(module, nn.Linear):
             module_output = DLRTLinear(
                 in_features=module.in_features,
                 out_features=module.out_features,
@@ -101,9 +102,7 @@ class DLRTNetwork(nn.Module):
                 # TODO: device checks??
             ).to(device=module.weight.device, dtype=module.weight.dtype)
             self.reset_layers = [module, name]
-        elif isinstance(module, nn.Conv2d):
-            # TODO: add warning that the replaced layers are slower than CUDnn (but that is
-            #  expected)
+        elif isinstance(module, nn.Conv2d):  # TODO 2
             module_output = DLRTConv2d(
                 adaptive=self.adaptive,
                 low_rank_percent=self.rank_percent,

@@ -40,15 +40,15 @@ class ToyNet(nn.Module):
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 16, 5)
         self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+        # self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(120, 100)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
         x = torch.flatten(x, 1)  # flatten all dimensions except batch
         x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        # x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
 
@@ -174,17 +174,21 @@ best_acc1 = 0
 def main():  # noqa: C901
     args = parser.parse_args()
 
-    if args.seed is not None:
-        random.seed(args.seed)
-        torch.manual_seed(args.seed)
+    # if args.seed is not None:
+    random.seed(42)
+    torch.manual_seed(42)
 
     # initialize the torch process group across all processes
     print("comm init")
-    if int(os.environ["SLURM_NTASKS"]) > 1:
-        comm.init(method="nccl-slurm")
-        args.world_size = dist.get_world_size()
-        args.rank = dist.get_rank()
-    else:
+    try:
+        if int(os.environ["SLURM_NTASKS"]) > 1:
+            comm.init(method="nccl-slurm")
+            args.world_size = dist.get_world_size()
+            args.rank = dist.get_rank()
+        else:
+            args.world_size = 1
+            args.rank = 0
+    except KeyError:
         args.world_size = 1
         args.rank = 0
 
@@ -196,7 +200,7 @@ def main():  # noqa: C901
         model = models.__dict__[args.arch](pretrained=True)
     else:
         print(f"=> creating model '{args.arch}'")
-        model = models.__dict__[args.arch](num_classes=10)
+        model = models.__dict__[args.arch]()
 
     # For multiprocessing distributed, DistributedDataParallel constructor
     # should always set the single device scope, otherwise,
@@ -231,7 +235,7 @@ def main():  # noqa: C901
         criterion=nn.CrossEntropyLoss().to(device),
         init_ddp=dist.is_initialized(),
         mixed_precision=False,
-        rank_percent=0.9,
+        rank_percent=0.99,
     )
     print(dlrt_trainer.model)
     if args.rank == 0:
@@ -330,15 +334,26 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
 
-        koutput, loutput, soutput = trainer.train_step_new(images, target, skip_adapt=True)
+        koutput, loutput, soutput = trainer.train_step_new(images, target, skip_adapt=False)
         # print(output.output.shape, target.shape)
-        argmax = torch.argmax(koutput.output, dim=1).to(torch.float32)
-        console.rule(f"train step {i}")
-        console.print(f"Argmax outputs k: {argmax.mean().item():.5f}, {argmax.max().item():.5f}, {argmax.min().item():.5f}, {argmax.std().item():.5f}")
-        argmax = torch.argmax(loutput.output, dim=1).to(torch.float32)
-        console.print(f"Argmax outputs l: {argmax.mean().item():.5f}, {argmax.max().item():.5f}, {argmax.min().item():.5f}, {argmax.std().item():.5f}")
-        argmax = torch.argmax(soutput.output, dim=1).to(torch.float32)
-        console.print(f"Argmax outputs s: {argmax.mean().item():.5f}, {argmax.max().item():.5f}, {argmax.min().item():.5f}, {argmax.std().item():.5f}")
+        # argmax = torch.argmax(koutput.output, dim=1).to(torch.float32)
+        # console.rule(f"train step {i}")
+        # console.print(f"Argmax outputs k "
+        #     f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
+        #     f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
+        # )
+        # argmax = torch.argmax(loutput.output, dim=1).to(torch.float32)
+        # console.print(f"Argmax outputs l "
+        #     f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
+        #     f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
+        # )
+        # argmax = torch.argmax(soutput.output, dim=1).to(torch.float32)
+        # console.print(f"Argmax outputs s "
+        #     f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
+        #     f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
+        # )
+        if torch.isnan(soutput.loss):
+            raise ValueError("NaN loss")
         # measure accuracy and record loss
         acc1, acc5 = accuracy(soutput.output, target, topk=(1, 5))
         losses.update(soutput.loss.item(), images.size(0))
@@ -352,14 +367,13 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         #    raise RuntimeError("asdf")
         #    break
 
-
         if i % args.print_freq == 0:  # and rank == 0:
-            print(
-                "Argmax outputs",
-                argmax.mean().item(),
-                argmax.max().item(),
-                argmax.min().item(),
-                argmax.std().item(),
+            argmax = torch.argmax(soutput.output, dim=1).to(torch.float32)
+            # console.rule(f"train step {i}")
+            console.print(
+                f"Argmax outputs s "
+                f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
+                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
             )
             progress.display(i + 1)
     if dist.is_initialized():
@@ -368,6 +382,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
 
 
 def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
+    console.rule("validation")
     def run_validate(loader, base_progress=0):
         rank = 0 if not dist.is_initialized() else dist.get_rank()
         with torch.no_grad():
@@ -379,10 +394,10 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
 
                 # compute output
                 output = trainer.valid_step(images, target)
-                argmax = torch.argmax(output.output, dim=1).to(torch.float32)
-                print(
-                    f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}",
-                )
+                # argmax = torch.argmax(output.output, dim=1).to(torch.float32)
+                # print(
+                #     f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}",
+                # )
 
                 # measure accuracy and record loss
                 acc1, acc5 = accuracy(output.output, target, topk=(1, 5))
@@ -395,6 +410,10 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
                 end = time.time()
 
                 if i % args.print_freq == 0 and rank == 0:
+                    argmax = torch.argmax(output.output, dim=1).to(torch.float32)
+                    print(
+                        f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}",
+                    )
                     progress.display(i + 1)
 
     batch_time = AverageMeter("Time", ":6.3f", Summary.NONE)
@@ -515,13 +534,15 @@ class ProgressMeter:
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
         if self.rank == 0:
-            print("\t".join(entries))
+            # print("\t".join(entries))
+            console.print(" ".join(entries))
 
     def display_summary(self):
         entries = [" *"]
         entries += [meter.summary() for meter in self.meters]
         if self.rank == 0:
-            print(" ".join(entries))
+            # print(" ".join(entries))
+            console.print(" ".join(entries))
 
     def _get_batch_fmtstr(self, num_batches):
         num_digits = len(str(num_batches // 1))

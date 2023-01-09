@@ -112,6 +112,18 @@ class DLRTTrainer:
         return loss, output
 
     def train_step_new(self, inputs, labels, skip_adapt=False):
+        requires_grad = []
+        for n, m in self.model.model.named_parameters():
+            if n.startswith("fc1"):  # m.requires_grad:
+                requires_grad.append(
+                        f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+                    )
+        if self.rank == 0:  # and self.counter % 100 == 0:
+            columns = Columns(requires_grad, equal=True, expand=True)
+            # console.rule("top of train step")
+            # console.print(columns)
+        # ================= start k ======
+
         fact = {"device": inputs.device, "dtype": inputs.dtype}
         self.kloss, self.lloss, self.sloss = (
             torch.tensor(0, **fact),
@@ -120,6 +132,8 @@ class DLRTTrainer:
         )
         self.output = None
         #print("all models true?", self.model.model == self.model.kmodel, self.model.kmodel == self.model.lmodel, self.model.smodel == self.model.kmodel)
+        # self.model.run_preprocess("k")
+        # self.model.run_preprocess("l")
         # ===== k step ====================
         #console.rule("k")
         self.model.set_layer_case("k")
@@ -128,22 +142,21 @@ class DLRTTrainer:
         koutput = self.model(inputs, "k")
         kloss = self.criterion(koutput, labels)
         kloss.backward()
+        # nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
 
         self.optimizer.step()
         self.model.run_postprocess("k")
 
         requires_grad = []
         for n, m in self.model.model.named_parameters():
-            #if n.startswith("conv1"):  # m.requires_grad:
-            requires_grad.append(
-                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-                )
+            if n.startswith("fc1"):  # m.requires_grad:
+                requires_grad.append(
+                        f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+                    )
         if self.rank == 0:  # and self.counter % 100 == 0:
             columns = Columns(requires_grad, equal=True, expand=True)
-            #console.rule("after k")
-            #console.print(columns)
-        #self.optimizer.step()
-        #self.model.run_postprocess("k")
+            # console.rule("after k")
+            # console.print(columns)
         # ==== end k ==== start l ======
         #console.rule("l")
         self.model.set_layer_case("l")
@@ -152,24 +165,23 @@ class DLRTTrainer:
         loutput = self.model(inputs, "l")
         lloss = self.criterion(loutput, labels)
         lloss.backward()
-
+        # nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
         self.optimizer.step()
         self.model.run_postprocess("l")
 
         requires_grad = []
         for n, m in self.model.model.named_parameters():
-            #if n.startswith("conv1"):  # m.requires_grad:
-            requires_grad.append(
-                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-            )
+            if n.startswith("fc1"):  # m.requires_grad:
+                requires_grad.append(
+                        f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+                )
         if self.rank == 0:  # and self.counter % 100 == 0:
             columns = Columns(requires_grad, equal=True, expand=True)
-            #console.rule("Before s")
-            #console.print(columns)
-        self.optimizer.step()
-        self.model.run_postprocess("l")
+            # console.rule("Before s")
+            # console.print(columns)
 
         # === end l === start s ===
+        # self.model.run_preprocess("s")
         #console.rule("s")
         self.model.set_layer_case("s")
         self.optimizer.zero_grad(set_to_none=False)
@@ -177,30 +189,30 @@ class DLRTTrainer:
         soutput = self.model(inputs, "s")
         sloss = self.criterion(soutput, labels)
         sloss.backward()
+        # nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
         self.optimizer.step()
 
         requires_grad = []
         for n, m in self.model.model.named_parameters():
-            #if n.startswith("conv1"):  # m.requires_grad:
-            requires_grad.append(
-                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-                )
+            if n.startswith("fc1"):  # m.requires_grad:
+                requires_grad.append(
+                        f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+                    )
         if self.rank == 0:  # and self.counter % 100 == 0:
             columns = Columns(requires_grad, equal=True, expand=True)
-            #console.rule("After s")
-            #console.print(columns)
+            # console.rule("After s")
+            # console.print(columns)
 
         # s postprocess is rank adaptation
         if self.adaptive:
             self.model.run_rank_adaption(skip_adapt)
 
             if self.rank == 0 and self.counter % 100 == 0 and not skip_adapt:
-                console.rule("After rank adaptation")
+                console.rule(f"After rank adaptation - {self.counter}")
                 columns = Columns(self.model.get_all_ranks(), equal=True, expand=True)
                 console.print(columns)
 
         self.counter += 1
-
         return self.return_tuple(kloss, koutput), self.return_tuple(lloss, loutput), self.return_tuple(sloss, soutput)
 
     def train_step(self, inputs, labels, skip_adapt=False):
@@ -267,11 +279,11 @@ class DLRTTrainer:
         else:
             self.optimizer.step()
 
-        if self.adaptive:
+        if self.adaptive and self.counter > 100:
             self.model.run_rank_adaption(skip_adapt)
 
             if self.rank == 0 and self.counter % 100 == 0 and not skip_adapt:
-                console.rule("After rank adaptation")
+                console.rule(f"After rank adaptation - {self.counter}")
                 columns = Columns(self.model.get_all_ranks(), equal=True, expand=True)
                 console.print(columns)
 
@@ -296,7 +308,7 @@ class DLRTTrainer:
         # TODO: fix me! need to repair this to perform with eval!
         # self.model.set_layer_case("s")
         # self.run_preprocess(case="s")
-        console.rule("valid step")
+        # console.rule("valid step")
         sret = self.model(model_inputs, 's')
         ls = self.criterion(sret, labels)
         return self.return_tuple(ls, sret)

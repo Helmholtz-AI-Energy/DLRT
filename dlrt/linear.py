@@ -34,7 +34,10 @@ def DLRTLinear(
     Args:
     """
     if not adaptive:
-        lowrank = int(low_rank_percent * in_features * out_features) if low_rank_percent is not None else None
+        if low_rank_percent is not None:
+            lowrank = int(low_rank_percent * min(in_features, out_features))
+        else:
+            lowrank = None
         return DLRTLinearFixed(
             in_features=in_features,
             out_features=out_features,
@@ -118,27 +121,27 @@ class DLRTLinearFixed(DLRTModule):
         self.lt = nn.Parameter(torch.empty((low_rank, out_features), **factory_kwargs))
 
         self.u = nn.Parameter(
-            torch.empty((self.in_features, self.rmax), requires_grad=False, **factory_kwargs),
+            torch.empty((self.in_features, self.low_rank), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
         self.unp1 = nn.Parameter(
-            torch.empty((self.in_features, 2 * self.rmax), requires_grad=False, **factory_kwargs),
+            torch.empty((self.in_features, 2 * self.low_rank), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
         self.vt = nn.Parameter(
-            torch.empty((self.rmax, self.out_features), requires_grad=False, **factory_kwargs),
+            torch.empty((self.low_rank, self.out_features), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
         self.vtnp1 = nn.Parameter(
-            torch.empty((2 * self.rmax, self.out_features), requires_grad=False, **factory_kwargs),
+            torch.empty((2 * self.low_rank, self.out_features), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
         self.n = nn.Parameter(
-            torch.empty((2 * self.rmax, self.rmax), requires_grad=False, **factory_kwargs),
+            torch.empty((2 * self.low_rank, self.low_rank), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
         self.m = nn.Parameter(
-            torch.empty((2 * self.rmax, self.rmax), requires_grad=False, **factory_kwargs),
+            torch.empty((2 * self.low_rank, self.low_rank), requires_grad=False, **factory_kwargs),
             requires_grad=False,
         )
 
@@ -678,15 +681,15 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
             requires_grad=True,
         )
         self.l = torch.nn.Parameter(  # noqa: E741
-            torch.randn(self.in_features, self.rmax, **factory_kwargs),
+            torch.empty(self.in_features, self.rmax, **factory_kwargs),
             requires_grad=True,
         )
         self.n_hat = torch.nn.Parameter(
-            torch.randn(self.rmax, self.low_rank, **factory_kwargs),
+            torch.empty(self.rmax, self.low_rank, **factory_kwargs),
             requires_grad=False,
         )
         self.m_hat = torch.nn.Parameter(
-            torch.randn(self.rmax, self.low_rank, **factory_kwargs),
+            torch.empty(self.rmax, self.low_rank, **factory_kwargs),
             requires_grad=False,
         )
         # self.u_hat = torch.nn.Parameter(
@@ -713,26 +716,51 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
     def get_classic_weight_repr(self):
         return self.k @ self.s @ self.lt
 
+    @torch.no_grad()
     def reset_parameters(self) -> None:
-        factory_kwargs = {"device": self.s_hat.device, "dtype": self.s_hat.dtype}
-        _, s_ordered, _ = torch.linalg.svd(
-            torch.diag(torch.abs(torch.randn(self.rmax, dtype=torch.float64))),
-        )
-        s_ordered = s_ordered.to(**factory_kwargs)
-        U = torch.randn(self.out_features, self.rmax, dtype=torch.float64)
-        V = torch.randn(self.in_features, self.rmax, dtype=torch.float64)
-        U, _, _ = torch.linalg.svd(U)
-        V, _, _ = torch.linalg.svd(V)
-        self.u = torch.nn.Parameter(U.to(**factory_kwargs), requires_grad=False)
-        self.s_hat = torch.nn.Parameter(torch.diag(s_ordered).to(**factory_kwargs))
-        self.v = torch.nn.Parameter(V.to(**factory_kwargs), requires_grad=False)
+        # factory_kwargs = {"device": self.s_hat.device, "dtype": self.s_hat.dtype}
+        # # U, s_ordered, V = torch.linalg.svd(
+        # #     torch.diag(torch.abs(torch.randn(self.rmax, dtype=torch.float64))),
+        # # )
+        # # weight = nn.init.kaiming_normal()
+        # U, s_ordered, V = torch.linalg.svd(
+        #     torch.randn(self.out_features, self.in_features, dtype=torch.float32),
+        # )
+        # # V = V.T
+        # s_ordered = s_ordered.to(**factory_kwargs)
+        # # U = torch.randn(self.out_features, self.rmax, dtype=torch.float64)
+        # # V = torch.randn(self.in_features, self.rmax, dtype=torch.float64)
+        # # U, _, _ = torch.linalg.svd(U)
+        # # V, _, _ = torch.linalg.svd(V)
+        # print(f"shape of u,s,vh: {U.shape}, {V.shape}, {s_ordered.shape}, "
+        #       f"in_features {self.in_features} out_features {self.out_features}")
+        # print(f"U mean, min, max: {U.mean()} {U.min()} {U.max()}")
+        # print(f"V mean, min, max: {V.mean()} {V.min()} {V.max()}")
+        # print(f"s mean, min, max: {s_ordered.mean()} {s_ordered.min()} {s_ordered.max()}")
+        # # raise NotImplementedError
+        # self.u = torch.nn.Parameter(U[:self.out_features, :self.rmax].to(**factory_kwargs),
+        #     requires_grad=False)
+        # self.s_hat = torch.nn.Parameter(torch.diag(s_ordered[:self.rmax]).to(**factory_kwargs))
+        # self.v = torch.nn.Parameter(V[:self.in_features, :self.rmax].to(**factory_kwargs),
+        #     requires_grad=False)
+        # # self.u_hat = self.u
+        # # self.v_hat = self.v
 
-        nn.init.kaiming_normal_(self.u_hat, a=math.sqrt(5))
-        nn.init.kaiming_normal_(self.v_hat, a=math.sqrt(5))
-        nn.init.kaiming_normal_(self.k, a=math.sqrt(5))
-        nn.init.kaiming_normal_(self.l, a=math.sqrt(5))
-        nn.init.kaiming_normal_(self.n_hat, a=math.sqrt(5))
-        nn.init.kaiming_normal_(self.m_hat, a=math.sqrt(5))
+        nn.init.kaiming_normal_(self.u)
+        nn.init.kaiming_normal_(self.s_hat)
+        # nn.init.kaiming_uniform_(self.s_hat)
+        nn.init.kaiming_normal_(self.v)
+        nn.init.kaiming_normal_(self.u_hat)
+        nn.init.kaiming_normal_(self.v_hat)
+        nn.init.kaiming_normal_(self.k)
+        nn.init.kaiming_normal_(self.l)
+        nn.init.kaiming_normal_(self.n_hat)
+        nn.init.kaiming_normal_(self.m_hat)
+        # self.s_hat.mul_(torch.rand(tuple(self.s_hat.shape), **factory_kwargs))
+        # self.rank_adaption()
+        # print("printing before raise")
+        # self.print_means()
+        # raise NotImplementedError
 
         if self.bias is not None:
             w = torch.linalg.multi_dot(
@@ -766,7 +794,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         shapes.append(f"n_hat: {self.n_hat.mean():.4f} {self.n_hat.min():.4f} {self.n_hat.max():.4f}")
         shapes.append(f"m_hat: {self.m_hat.mean():.4f} {self.m_hat.min():.4f} {self.m_hat.max():.4f}")
         if self.bias is not None:
-            shapes.append(f"bias: {self.bias.mean()} {self.bias.min():.4f} {self.bias.max():.4f}")
+            shapes.append(f"bias: {self.bias.mean():.4f} {self.bias.min():.4f} {self.bias.max():.4f}")
         #if self.rank == 0: # and self.counter % 100 == 0:
         columns = Columns(shapes, equal=True, expand=True)
         #console.rule("All shapes in linear")
@@ -789,21 +817,21 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         #    console.rule(f"forward val: {input.mean()}")
         #    self.print_means()
 
-        if self.train_case == "k" and self.training:
+        if self.train_case == "k" or not self.training:
             k, v = self.k[:, : self.low_rank], self.v[:, : self.low_rank]
             # slicing off eps:
-            #intermediate = v @ k.T
-            #intermediate[(intermediate < eps) & (intermediate > -eps)] = 0.
-            #ret = input @ intermediate
+            # intermediate = v @ k.T
+            # intermediate[(intermediate < eps) & (intermediate > -eps)] = 0.
+            # ret = input @ intermediate
             ret = torch.linalg.multi_dot([input, v, k.T])  # TODO: transpose flipped??
-        elif self.train_case == "l" and self.training:
+        elif self.train_case == "l":
             l, u = self.l[:, : self.low_rank], self.u[:, : self.low_rank]
             # slicing off eps:
             #intermediate = l @ u.T
             #intermediate[(intermediate < eps) & (intermediate > -eps)] = 0.
             #ret = input @ intermediate
             ret = torch.linalg.multi_dot([input, l, u.T])  # TODO: transpose flipped?
-        else:  # self.train_case == 'S':
+        else:  # self.train_case == 's': or validation
             lr2 = 2 * self.low_rank
             s_hat = self.s_hat[:lr2, :lr2].T
             u_hat = self.u_hat[:, :lr2].T
@@ -823,19 +851,21 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         # k prepro
         # k -> aux_U @ s
         k = self.u[:, : self.low_rank] @ self.s_hat[: self.low_rank, : self.low_rank]
+        self.k.zero_()
         self.k[:, : self.low_rank] = k
         self.k.requires_grad = True
-        #console.rule("after k_prepro")
-        #self.print_shapes()
+        # console.rule("after k_prepro")
+        # self.print_means()
 
     @torch.no_grad()
     def l_preprocess(self):
         self._change_params_requires_grad(False)
         L = self.v[:, : self.low_rank] @ self.s_hat[: self.low_rank, : self.low_rank].T
+        self.l.zero_()
         self.l[:, : self.low_rank] = L
         self.l.requires_grad = True
-        #console.rule("after l prepro")
-        #self.print_shapes()
+        # console.rule("after l prepro")
+        # self.print_means()
 
     @torch.no_grad()
     def k_postprocess(self):
@@ -843,20 +873,24 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         lr2 = 2 * self.low_rank
         u_hat, _ = torch.linalg.qr(torch.hstack((self.k[:, :lr], self.u[:, :lr])))
         #print("k, u", lr, torch.hstack((self.k[:, :lr], self.u[:, :lr])).shape)
+        self.u_hat.zero_()
         self.u_hat[:, :lr2] = u_hat
+        self.m_hat.zero_()
         self.m_hat[:lr2, :lr] = self.u_hat[:, :lr2].T @ self.u[:, :lr]
-        #console.rule("after k_post")
-        #self.print_shapes()
+        # console.rule("after k_post")
+        # self.print_means()
 
     @torch.no_grad()
     def l_postprocess(self):
         lr = self.low_rank
         lr2 = 2 * self.low_rank
         V_hat, _ = torch.linalg.qr(torch.hstack((self.l[:, :lr], self.v[:, :lr])))
+        self.v_hat.zero_()
         self.v_hat[:, :lr2] = V_hat
+        self.n_hat.zero_()
         self.n_hat[:lr2, :lr] = self.v_hat[:, :lr2].T @ self.v[:, :lr]
-        #console.rule("after lpost")
-        #self.print_shapes()
+        # console.rule("after lpost")
+        # self.print_means()
 
     @torch.no_grad()
     def s_preprocess(self):
@@ -869,6 +903,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         s = torch.linalg.multi_dot(
             [self.m_hat[:lr2, :lr], self.s_hat[:lr, :lr], self.n_hat[: 2 * lr, :lr].T],
         )
+        self.s_hat.zero_()
         self.s_hat[:lr2, :lr2] = s
 
         # bias is trainable for the s step
@@ -876,8 +911,8 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         self.s_hat.requires_grad = True
         self.bias.requires_grad = True
         #self._change_params_requires_grad(True)
-        #console.rule("after s pre")
-        #self.print_shapes()
+        # console.rule("after s pre")
+        # self.print_means()
 
     @torch.no_grad()
     def rank_adaption(self, skip=False):
@@ -888,9 +923,9 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         # 1) compute SVD of S
         # d=singular values, u2 = left singuar vecs, v2= right singular vecs
         # TODO: 64 bit?
-        s_small = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank].clone().detach()
+        s_small = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank]
         try:
-            u2, sing, vh2 = torch.linalg.svd(s_small.to(torch.float32), full_matrices=False, driver="gesvdj")
+            u2, sing, vh2 = torch.linalg.svd(s_small)  #s_small.to(torch.float32))
         except torch._C._LinAlgError as e:
             print(f"LinAlgError during SVD -> {e}")
             return
@@ -918,7 +953,9 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
             rmax = self.low_rank
         else:
             rmax = max([min([rmax, self.rmax]), 2])
-
+        self.s_hat.zero_()
+        self.u.zero_()
+        self.v.zero_()
         self.s_hat[:rmax, :rmax] = torch.diag(sing[:rmax]).to(
             device=self.s_hat.device,
             dtype=self.s_hat.dtype,
@@ -927,5 +964,7 @@ class DLRTLinearAdaptiveTransposed(DLRTModule):
         self.v[:, :rmax] = self.v_hat[:, : 2 * self.low_rank] @ (v2[:, :rmax])
 
         self.low_rank = int(rmax)
+        # print("End of rank adaptation")
+        # self.print_means()
         #console.rule("after rank adapt")
         #self.print_shapes()

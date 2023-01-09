@@ -207,10 +207,12 @@ class _ConvNd(DLRTModule):
         self.basic_number_weights = in_channels * (out_channels // groups + kernel_size_number)
         # a, b = in_channels, (out_channels // groups + kernel_size_number)
 
+        # TODO: fix me!
         self.low_rank = int(
             min([self.out_channels, self.in_channels * self.kernel_size_number]) / 2,
         )
         self.rmax = self.low_rank * 2
+        # print("rmax", self.rmax, self.out_channels, self.in_channels * self.kernel_size_number)
 
         # # TODO: fix me???? not sure if this is an issue here or not
         # if low_rank_percent is None:
@@ -374,7 +376,7 @@ class DLRTConv2dFixed(_ConvNd):
         self.u = torch.nn.Parameter(U[:, : self.low_rank].to(device), requires_grad=False)
         self.v = torch.nn.Parameter(vh.T[:, : self.low_rank], requires_grad=False)
 
-        self.s_hat = torch.nn.Parameter(s_ord[: self.low_rank, : self.low_rank], requires_grad=True)
+        self.s_hat = torch.nn.Parameter(torch.diag(s_ord[: self.low_rank]), requires_grad=True)
         self.k = torch.nn.Parameter(torch.empty(n, self.low_rank, **factory_kwargs), requires_grad=True)
         self.l = torch.nn.Parameter(  # noqa: E741
             torch.empty(m, self.low_rank, **factory_kwargs),
@@ -391,6 +393,7 @@ class DLRTConv2dFixed(_ConvNd):
         )
         self.reset_parameters()
 
+    @torch.no_grad()
     def reset_parameters(self) -> None:
         # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
         # uniform(-1/sqrt(k), 1/sqrt(k)), where k = weight.size(1) * prod(*kernel_size)
@@ -462,12 +465,14 @@ class DLRTConv2dFixed(_ConvNd):
         ) + 1
 
         if self.train_case == "k":
-            out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), self.v, self.k.T])
+            out_unf = inp_unf.transpose(1, 2) @ self.v @ self.k.T
+            # out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), self.v, self.k.T])
         elif self.train_case == "l":
-            out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), self.l, self.u.T])
+            out_unf = inp_unf.transpose(1, 2) @ self.l @ self.u.T
+            # out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), self.l, self.u.T])
         elif self.train_case == "s":
-            out_unf = torch.linalg.multi_dot(
-                [inp_unf.transpose(1, 2), self.v, self.s_hat.T, self.u.T],
+            out_unf = inp_unf.transpose(1, 2) @ torch.linalg.multi_dot(
+                [self.v, self.s_hat.T, self.u.T],
             )
         else:
             raise ValueError(f"Invalude step value: {self.step}")
@@ -630,15 +635,15 @@ class DLRTConv2dAdaptive(_ConvNd):
             requires_grad=True,
         )
         self.l = torch.nn.Parameter(  # noqa: E741
-            torch.randn(m, self.rmax, **factory_kwargs),
+            torch.empty(m, self.rmax, **factory_kwargs),
             requires_grad=True,
         )
         self.n_hat = torch.nn.Parameter(
-            torch.randn(self.rmax, self.low_rank, **factory_kwargs),
+            torch.empty(self.rmax, self.low_rank, **factory_kwargs),
             requires_grad=False,
         )
         self.m_hat = torch.nn.Parameter(
-            torch.randn(self.rmax, self.low_rank, **factory_kwargs),
+            torch.empty(self.rmax, self.low_rank, **factory_kwargs),
             requires_grad=False,
         )
 
@@ -650,23 +655,30 @@ class DLRTConv2dAdaptive(_ConvNd):
         # uniform(-1/sqrt(k), 1/sqrt(k)), where k = weight.size(1) * prod(*kernel_size)
         # For more details see: https://github.com/pytorch/pytorch/issues/15314#issuecomment-477448573
         # nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        factory_kwargs = {"device": self.bias.device, "dtype": self.bias.dtype}
-        n, m = self.out_channels, self.in_channels * self.kernel_size_number
-        _, s_ordered, _ = torch.linalg.svd(torch.diag(torch.abs(torch.randn(2 * self.rmax))))
-        U = torch.randn(n, self.rmax)
-        V = torch.randn(m, self.rmax)
-        U, _, _ = torch.linalg.svd(U)
-        V, _, _ = torch.linalg.svd(V)
-        self.u.set_(U.to(**factory_kwargs))  # , requires_grad=False
-        self.s_hat.set_(torch.diag(s_ordered).to(**factory_kwargs))
-        self.v.set_(V.to(**factory_kwargs))  # , requires_grad=False
-        # below is with normal initialization?
-        nn.init.kaiming_normal_(self.u_hat, a=math.sqrt(5))
-        nn.init.kaiming_normal_(self.v_hat, a=math.sqrt(5))
-        nn.init.kaiming_normal_(self.k, a=math.sqrt(5))
-        nn.init.kaiming_normal_(self.l, a=math.sqrt(5))
-        nn.init.kaiming_normal_(self.n_hat, a=math.sqrt(5))
-        nn.init.kaiming_normal_(self.m_hat, a=math.sqrt(5))
+        # factory_kwargs = {"device": self.bias.device, "dtype": self.bias.dtype}
+        # n, m = self.out_channels, self.in_channels * self.kernel_size_number
+        # _, s_ordered, _ = torch.linalg.svd(torch.diag(torch.abs(torch.randn(2 * self.rmax))))
+        # U = torch.randn(n, self.rmax)
+        # V = torch.randn(m, self.rmax)
+        # U, _, _ = torch.linalg.svd(U)
+        # V, _, _ = torch.linalg.svd(V)
+        # self.u.set_(U.to(**factory_kwargs))  # , requires_grad=False
+        # self.s_hat.set_(torch.diag(s_ordered).to(**factory_kwargs))
+        # self.v.set_(V.to(**factory_kwargs))  # , requires_grad=False
+        # # below is with normal initialization?
+
+        nn.init.kaiming_normal_(self.u)
+        # nn.init.kaiming_normal_(self.s_hat, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.s_hat)
+
+        nn.init.kaiming_normal_(self.v)
+
+        nn.init.kaiming_normal_(self.u_hat)
+        nn.init.kaiming_normal_(self.v_hat)
+        nn.init.kaiming_normal_(self.k)
+        nn.init.kaiming_normal_(self.l)
+        nn.init.kaiming_normal_(self.n_hat)
+        nn.init.kaiming_normal_(self.m_hat)
 
         # for testing
         # self.original_weight = Parameter(self.weight.reshape(self.original_shape))
@@ -726,7 +738,7 @@ class DLRTConv2dAdaptive(_ConvNd):
         )
 
         eps = torch.finfo(inp_unf.dtype).eps
-        if self.train_case == "k":
+        if self.train_case == "k" or not self.training:
             #print('k step')
             k, v = self.k[:, : self.low_rank], self.v[:, : self.low_rank]
             second = v @ k.T
@@ -735,7 +747,7 @@ class DLRTConv2dAdaptive(_ConvNd):
             # print([inp_unf.transpose(1, 2).shape, v.shape, k.T.shape], self.low_rank)
             #out_unf = torch.linalg.multi_dot([inp_unf.transpose(1, 2), v, k.T])
             #out_unf = inp_unf.transpose(1, 2) @ v @ k.T
-        elif self.train_case == "l":
+        elif self.train_case == "l" and self.training:
             #print('l step')
             #out_unf = torch.linalg.multi_dot(
             #    [inp_unf.transpose(1, 2), self.l[:, : self.low_rank], self.u[:, : self.low_rank].T],
