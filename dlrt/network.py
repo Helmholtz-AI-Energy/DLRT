@@ -56,14 +56,17 @@ class DLRTNetwork(nn.Module):
         self.reset_layers = None
         self.rank = 0 if not dist.is_initialized() else dist.get_rank()
 
+        # todo: test me! -> keeping first dense layer
+        self.first_layer = None
         self.model = self._replace_layers(self.model)
-        self.run_preprocess("k")
-        self.run_preprocess("l")
-        self.run_postprocess("k")
-        self.run_postprocess("l")
-        self.run_preprocess("s")
-        if adaptive:
-           self.run_rank_adaption()
+
+        # self.run_preprocess("k")
+        # self.run_preprocess("l")
+        # self.run_postprocess("k")
+        # self.run_postprocess("l")
+        # self.run_preprocess("s")
+        # if adaptive:
+        #    self.run_rank_adaption()
 
         if dense_last_layer:
             self.model = self._reset_last_layer_to_dense(self.model)
@@ -91,7 +94,9 @@ class DLRTNetwork(nn.Module):
         module_output = module
         # this will remove all the BatchNorm layers from the network
         # TODO: add warning that the replaced layers are slower than CUDnn (but that is expected)
-        if isinstance(module, nn.Linear):
+        # if isinstance(module, (nn.Linear, nn.Conv2d)) and self.first_layer is None:
+        #     self.first_layer = 1
+        if isinstance(module, nn.Linear):  # TODO: linear
             module_output = DLRTLinear(
                 in_features=module.in_features,
                 out_features=module.out_features,
@@ -121,6 +126,8 @@ class DLRTNetwork(nn.Module):
             # print(f"replacing {name} old: {module} with {module_output}")
             # del module
             # module = module_output
+        # elif isinstance(module, nn.BatchNorm2d):
+        #     module_output = nn.Identity().to(device=module.weight.device, dtype=module.weight.dtype)
 
         for name, child in module.named_children():
             # print(name, child.extra_repr())

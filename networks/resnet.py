@@ -29,24 +29,41 @@ from rich import print as rprint
 from rich.columns import Columns
 
 from rich.console import Console
-console = Console(width=120)
+console = Console(width=140)
 
+# import cProfile, pstats, io
+# from pstats import SortKey
+# pr = cProfile.Profile()
 
+import mlflow
+import mlflow.pytorch
+import random
 
 class ToyNet(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
+        # self.conv1 = nn.Conv2d(3, 6, 5)
+        # self.pool = nn.MaxPool2d(2, 2)
+        # self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc0 = nn.Linear(3072, 16 * 5 * 5)
+        # self.fc0a = nn.Linear(1000, 1000)
+        # self.fc0b = nn.Linear(1000, 16 * 5 * 5)
         self.fc1 = nn.Linear(16 * 5 * 5, 120)
         # self.fc2 = nn.Linear(120, 84)
         self.fc3 = nn.Linear(120, 100)
 
     def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
+        # x = self.pool(F.relu(self.conv1(x)))
+        # x = self.pool(F.relu(self.conv2(x)))
+        # x = torch.flatten(x, 1)  # flatten all dimensions except batch
+        # x = F.relu(self.fc1(x))
+        # # x = F.relu(self.fc2(x))
+        # x = self.fc3(x)
+
         x = torch.flatten(x, 1)  # flatten all dimensions except batch
+        x = F.relu(self.fc0(x))
+        # x = F.relu(self.fc0a(x))
+        # x = F.relu(self.fc0b(x))
         x = F.relu(self.fc1(x))
         # x = F.relu(self.fc2(x))
         x = self.fc3(x)
@@ -167,13 +184,17 @@ parser.add_argument(
     help="seed for initializing training. ",
 )
 parser.add_argument("--dummy", action="store_true", help="use fake data to benchmark")
+parser.add_argument(
+    "--adaptive",
+    default=False,
+    type=bool,
+    help="use adaptive training?"
+)
 
 best_acc1 = 0
 
 
-def main():  # noqa: C901
-    args = parser.parse_args()
-
+def main(args):  # noqa: C901
     # if args.seed is not None:
     random.seed(42)
     torch.manual_seed(42)
@@ -191,6 +212,8 @@ def main():  # noqa: C901
     except KeyError:
         args.world_size = 1
         args.rank = 0
+
+    mlflow.log_params({"world_size": args.world_size, "rank": args.rank})
 
     # create model
     if args.arch == "toynet":
@@ -222,22 +245,46 @@ def main():  # noqa: C901
     # )
     # print("converting model to DLRT")
     # print(model)
+
+    optimizer = "SGD"
+    nesterov = True
+    skip_adapt = False
+    rank_percent = 0.5
+    eps_linear = 0.01
+    eps_conv = 0.01
+    mlflow.log_params(
+        {
+            "optimizer": optimizer,
+            "nesterov": nesterov,
+            "lr": args.lr,
+            "momentum": args.momentum,
+            "weight_decay": args.weight_decay,
+            "skip_adapt": skip_adapt,
+            "rank_percent": rank_percent,
+            "loss fn": "CrossEntropy",
+            "adaptive": args.adaptive,
+            "eps_linear": eps_linear,
+            "eps_conv": eps_conv,
+        }
+    )
+
     dlrt_trainer = dlrt.DLRTTrainer(
         torch_model=model,
-        optimizer_name="SGD",
+        optimizer_name=optimizer,
         optimizer_kwargs={
             "lr": args.lr,
             "momentum": args.momentum,
-            # "weight_decay": args.weight_decay,
-            # 'nesterov': True,
+            "weight_decay": args.weight_decay,
+            'nesterov': nesterov,
         },
-        adaptive=True,
+        adaptive=args.adaptive,
         criterion=nn.CrossEntropyLoss().to(device),
         init_ddp=dist.is_initialized(),
         mixed_precision=False,
-        rank_percent=0.99,
+        rank_percent=rank_percent,
+        epsilon={"linear": eps_linear, "conv2d": eps_conv}
     )
-    print(dlrt_trainer.model)
+    print(dlrt_trainer.model.model)
     if args.rank == 0:
         # print(dlrt_trainer.model.get_all_ranks())
         columns = Columns(dlrt_trainer.model.get_all_ranks(), equal=True, expand=True)
@@ -297,7 +344,20 @@ def main():  # noqa: C901
             train_sampler.set_epoch(epoch)
 
         # train for one epoch
-        train_loss = train(train_loader, dlrt_trainer, epoch, device, args)
+        # # profiling =====================
+        # pr.enable()
+        # # profiling =====================
+
+        train_loss = train(train_loader, dlrt_trainer, epoch, device, args, skip_adapt=skip_adapt)
+        # # profiling =====================
+        # pr.disable()
+        # s = io.StringIO()
+        # sortby = SortKey.CUMULATIVE
+        # ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+        # ps.print_stats(15)
+        # print(s.getvalue())
+        # raise NotImplementedError
+        # # profiling =====================
 
         # evaluate on validation set
         _ = validate(val_loader, dlrt_trainer, args)
@@ -310,10 +370,10 @@ def main():  # noqa: C901
             print(dlrt_trainer.optimizer.param_groups[0]["lr"])
 
 
-def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
+def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args, skip_adapt=True):
     batch_time = AverageMeter("Time", ":6.3f")
     data_time = AverageMeter("Data", ":6.3f")
-    losses = AverageMeter("Loss", ":.4e")
+    losses = AverageMeter("Loss", ":.4f")
     top1 = AverageMeter("Acc@1", ":6.2f")
     top5 = AverageMeter("Acc@5", ":6.2f")
     progress = ProgressMeter(
@@ -333,8 +393,10 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         # move data to the same device as model
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
-
-        koutput, loutput, soutput = trainer.train_step_new(images, target, skip_adapt=False)
+        # console.rule(f"step {i}")
+        koutput, loutput, soutput = trainer.train_step_new(
+            images, target, skip_adapt=skip_adapt  # i < 100 and i % 50 != 0
+        )
         # print(output.output.shape, target.shape)
         # argmax = torch.argmax(koutput.output, dim=1).to(torch.float32)
         # console.rule(f"train step {i}")
@@ -367,15 +429,31 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args):
         #    raise RuntimeError("asdf")
         #    break
 
-        if i % args.print_freq == 0:  # and rank == 0:
-            argmax = torch.argmax(soutput.output, dim=1).to(torch.float32)
+        if (i % args.print_freq == 0 or i == len(train_loader) - 1) and args.rank == 0:
             # console.rule(f"train step {i}")
+            argmax = torch.argmax(koutput.output, dim=1).to(torch.float32)
+            console.print(
+                f"Argmax outputs k "
+                f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
+                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
+            )
+            argmax = torch.argmax(loutput.output, dim=1).to(torch.float32)
+            console.print(
+                f"Argmax outputs l "
+                f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
+                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
+            )
+            argmax = torch.argmax(soutput.output, dim=1).to(torch.float32)
             console.print(
                 f"Argmax outputs s "
                 f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
                 f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
             )
             progress.display(i + 1)
+            mlflow.log_metrics(
+                metrics={"train loss": losses.avg, "train top1": top1.avg.item(), "train top5": top5.avg.item()},
+                step=trainer.counter,
+            )
     if dist.is_initialized():
         losses.all_reduce()
     return losses.avg
@@ -387,6 +465,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
         rank = 0 if not dist.is_initialized() else dist.get_rank()
         with torch.no_grad():
             end = time.time()
+            num_elem = len(loader) - 1
             for i, (images, target) in enumerate(loader):
                 i = base_progress + i
                 images = images.cuda(args.gpu, non_blocking=True)
@@ -409,7 +488,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
                 batch_time.update(time.time() - end)
                 end = time.time()
 
-                if i % args.print_freq == 0 and rank == 0:
+                if (i % args.print_freq == 0 or i == num_elem) and rank == 0:
                     argmax = torch.argmax(output.output, dim=1).to(torch.float32)
                     print(
                         f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}",
@@ -417,7 +496,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
                     progress.display(i + 1)
 
     batch_time = AverageMeter("Time", ":6.3f", Summary.NONE)
-    losses = AverageMeter("Loss", ":.4e", Summary.NONE)
+    losses = AverageMeter("Loss", ":.4f", Summary.NONE)
     top1 = AverageMeter("Acc@1", ":6.2f", Summary.AVERAGE)
     top5 = AverageMeter("Acc@5", ":6.2f", Summary.AVERAGE)
     progress = ProgressMeter(
@@ -453,6 +532,13 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
     if dist.is_initialized():
         top1.all_reduce()
         top5.all_reduce()
+
+    if args.rank == 0:
+        mlflow.log_metrics(
+            metrics={"val loss": losses.avg, "val top1": top1.avg.item(),
+                     "val top5": top5.avg.item()},
+            step=trainer.counter,
+        )
 
     return top1.avg
 
@@ -568,4 +654,15 @@ def accuracy(output, target, topk=(1,)):
 
 
 if __name__ == "__main__":
-    main()
+    args = parser.parse_args()
+    print(args)
+    mlflow.set_tracking_uri("file:/hkfs/work/workspace/scratch/qv2382-dlrt/mlflow/")
+    experiment = mlflow.set_experiment(args.arch)
+    # run_id -> adaptive needs to be unique, roll random int?
+    run_name = f"wrapall-adapt-{args.adaptive}-{random.randint(1000000000, 9999999999)}"
+    with mlflow.start_run():
+        mlflow.set_tag("mlflow.runName", run_name)
+        print("run_name:", run_name)
+        print('tracking uri:', mlflow.get_tracking_uri())
+        print('artifact uri:', mlflow.get_artifact_uri())
+        main(args)

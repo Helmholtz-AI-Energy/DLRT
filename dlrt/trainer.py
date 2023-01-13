@@ -112,16 +112,16 @@ class DLRTTrainer:
         return loss, output
 
     def train_step_new(self, inputs, labels, skip_adapt=False):
-        requires_grad = []
-        for n, m in self.model.model.named_parameters():
-            if n.startswith("fc1"):  # m.requires_grad:
-                requires_grad.append(
-                        f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-                    )
-        if self.rank == 0:  # and self.counter % 100 == 0:
-            columns = Columns(requires_grad, equal=True, expand=True)
-            # console.rule("top of train step")
-            # console.print(columns)
+        # requires_grad = []
+        # for n, m in self.model.model.named_parameters():
+        #     if n.startswith("fc1"):  # m.requires_grad:
+        #         requires_grad.append(
+        #                 f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+        #             )
+        # if self.rank == 0:  # and self.counter % 100 == 0:
+        #     columns = Columns(requires_grad, equal=True, expand=True)
+        #     console.rule("top of train step")
+        #     console.print(columns)
         # ================= start k ======
 
         fact = {"device": inputs.device, "dtype": inputs.dtype}
@@ -132,85 +132,86 @@ class DLRTTrainer:
         )
         self.output = None
         #print("all models true?", self.model.model == self.model.kmodel, self.model.kmodel == self.model.lmodel, self.model.smodel == self.model.kmodel)
-        # self.model.run_preprocess("k")
-        # self.model.run_preprocess("l")
         # ===== k step ====================
         #console.rule("k")
         self.model.set_layer_case("k")
+        self.model.run_preprocess("k")
         self.optimizer.zero_grad(set_to_none=True)
-        # k preprocess is in the forward step TODO: test speed there?
         koutput = self.model(inputs, "k")
         kloss = self.criterion(koutput, labels)
         kloss.backward()
         # nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
-
         self.optimizer.step()
-        self.model.run_postprocess("k")
+        # NOTE: K postprocess must be run AFTER l step
+        # self.model.run_postprocess("k")
 
-        requires_grad = []
-        for n, m in self.model.model.named_parameters():
-            if n.startswith("fc1"):  # m.requires_grad:
-                requires_grad.append(
-                        f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-                    )
-        if self.rank == 0:  # and self.counter % 100 == 0:
-            columns = Columns(requires_grad, equal=True, expand=True)
-            # console.rule("after k")
-            # console.print(columns)
-        # ==== end k ==== start l ======
-        #console.rule("l")
+        # requires_grad = []
+        # for n, m in self.model.model.named_parameters():
+        #     if n.startswith("fc1"):  # m.requires_grad:
+        #         requires_grad.append(
+        #                 f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+        #             )
+        # if self.rank == 0:  # and self.counter % 100 == 0:
+        #     columns = Columns(requires_grad, equal=True, expand=True)
+        #     console.rule("after k")
+        #     console.print(columns)
+        # # ==== end k ==== start l ======
+        # console.rule("l")
         self.model.set_layer_case("l")
-        self.optimizer.zero_grad(set_to_none=True)
-        # l preprocess is in the forward step TODO: test speed there?
+        self.model.run_preprocess("l")
+        self.optimizer.zero_grad(set_to_none=True)  # TODO: True of False?
         loutput = self.model(inputs, "l")
         lloss = self.criterion(loutput, labels)
         lloss.backward()
         # nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
         self.optimizer.step()
+
+        # post process for both k and l
+        self.model.run_postprocess("k")
         self.model.run_postprocess("l")
 
-        requires_grad = []
-        for n, m in self.model.model.named_parameters():
-            if n.startswith("fc1"):  # m.requires_grad:
-                requires_grad.append(
-                        f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-                )
-        if self.rank == 0:  # and self.counter % 100 == 0:
-            columns = Columns(requires_grad, equal=True, expand=True)
-            # console.rule("Before s")
-            # console.print(columns)
+        # requires_grad = []
+        # for n, m in self.model.model.named_parameters():
+        #     if n.startswith("fc1"):  # m.requires_grad:
+        #         requires_grad.append(
+        #                 f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+        #         )
+        # if self.rank == 0:  # and self.counter % 100 == 0:
+        #     columns = Columns(requires_grad, equal=True, expand=True)
+        #     console.rule("after l")
+        #     console.print(columns)
 
         # === end l === start s ===
-        # self.model.run_preprocess("s")
-        #console.rule("s")
+        # console.rule("s")
         self.model.set_layer_case("s")
-        self.optimizer.zero_grad(set_to_none=False)
-        # l preprocess is in the forward step TODO: test speed there?
+        self.model.run_preprocess("s")
+        self.optimizer.zero_grad()
         soutput = self.model(inputs, "s")
         sloss = self.criterion(soutput, labels)
         sloss.backward()
         # nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
         self.optimizer.step()
 
-        requires_grad = []
-        for n, m in self.model.model.named_parameters():
-            if n.startswith("fc1"):  # m.requires_grad:
-                requires_grad.append(
-                        f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-                    )
-        if self.rank == 0:  # and self.counter % 100 == 0:
-            columns = Columns(requires_grad, equal=True, expand=True)
-            # console.rule("After s")
-            # console.print(columns)
+        # requires_grad = []
+        # for n, m in self.model.model.named_parameters():
+        #     if n.startswith("fc1"):  # m.requires_grad:
+        #         requires_grad.append(
+        #                 f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
+        #             )
+        # if self.rank == 0:  # and self.counter % 100 == 0:
+        #     columns = Columns(requires_grad, equal=True, expand=True)
+        #     console.rule("After s")
+        #     console.print(columns)
 
         # s postprocess is rank adaptation
         if self.adaptive:
             self.model.run_rank_adaption(skip_adapt)
 
-            if self.rank == 0 and self.counter % 100 == 0 and not skip_adapt:
+            if self.rank == 0 and self.counter % 10 == 0 and not skip_adapt:
                 console.rule(f"After rank adaptation - {self.counter}")
                 columns = Columns(self.model.get_all_ranks(), equal=True, expand=True)
                 console.print(columns)
+                console.rule()
 
         self.counter += 1
         return self.return_tuple(kloss, koutput), self.return_tuple(lloss, loutput), self.return_tuple(sloss, soutput)
