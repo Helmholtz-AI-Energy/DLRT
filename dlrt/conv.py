@@ -355,31 +355,31 @@ class DLRTConv2dFixed(_ConvNd):
         in_kern = self.in_channels * self.kernel_size_number
         self.u = nn.Parameter(
             torch.empty((self.out_channels, self.low_rank), **factory_kwargs),
-            requires_grad=False
+            requires_grad=False,
         )
         self.u_hat = nn.Parameter(
             torch.empty((self.out_channels, self.low_rank), **factory_kwargs),
-            requires_grad=False
+            requires_grad=False,
         )
         self.v = nn.Parameter(
             torch.empty((in_kern, self.low_rank), **factory_kwargs),
-            requires_grad=False
+            requires_grad=False,
         )
         self.v_hat = nn.Parameter(
             torch.empty((in_kern, self.low_rank), **factory_kwargs),
-            requires_grad=False
+            requires_grad=False,
         )
         self.s_hat = nn.Parameter(
             torch.empty((self.low_rank, self.low_rank), **factory_kwargs),
-            requires_grad=True
+            requires_grad=True,
         )
         self.k = nn.Parameter(
             torch.empty((self.out_channels, self.low_rank), **factory_kwargs),
-            requires_grad=True
+            requires_grad=True,
         )
         self.l = nn.Parameter(  # noqa: E741
             torch.empty((in_kern, self.low_rank), **factory_kwargs),
-            requires_grad=True
+            requires_grad=True,
         )
         self.n_hat = torch.nn.Parameter(
             torch.empty((self.low_rank, self.low_rank), **factory_kwargs),
@@ -427,12 +427,16 @@ class DLRTConv2dFixed(_ConvNd):
 
         batch_size = input.shape[0]
 
-        inp_unf = F.unfold(
-            input,
-            self.kernel_size,
-            padding=self.padding,
-            stride=self.stride,
-        ).to(input.device).transpose(1, 2)
+        inp_unf = (
+            F.unfold(
+                input,
+                self.kernel_size,
+                padding=self.padding,
+                stride=self.stride,
+            )
+            .to(input.device)
+            .transpose(1, 2)
+        )
 
         # out_h = int(np.floor(((input.shape[2] + 2 * self.padding[0] - self.dilation[0] * (
         #                 self.kernel_size[0] - 1) - 1) / self.stride[0]) + 1))
@@ -579,8 +583,11 @@ class DLRTConv2dAdaptive(_ConvNd):
         in_kern = self.in_channels * self.kernel_size_number
         # ONLY create the parameters, reset_parameters fills them
         self.s_hat = nn.Parameter(
-            torch.empty(self.rmax, self.rmax,
-                **factory_kwargs),
+            torch.empty(
+                self.rmax,
+                self.rmax,
+                **factory_kwargs,
+            ),
             requires_grad=True,
         )
         self.u = nn.Parameter(
@@ -657,12 +664,16 @@ class DLRTConv2dAdaptive(_ConvNd):
         """
         batch_size = input.shape[0]
 
-        inp_unf = F.unfold(
-            input,
-            self.kernel_size,
-            padding=self.padding,
-            stride=self.stride,
-        ).to(input.device).transpose(1, 2)
+        inp_unf = (
+            F.unfold(
+                input,
+                self.kernel_size,
+                padding=self.padding,
+                stride=self.stride,
+            )
+            .to(input.device)
+            .transpose(1, 2)
+        )
 
         # out_h = int(np.floor(((input.shape[2] + 2 * self.padding[0] - self.dilation[0] * (
         #                 self.kernel_size[0] - 1) - 1) / self.stride[0]) + 1))
@@ -777,9 +788,11 @@ class DLRTConv2dAdaptive(_ConvNd):
         lr2 = 2 * self.low_rank
 
         s = torch.linalg.multi_dot(
-            [self.m_hat[:lr2, :lr],
-             self.s_hat[:lr, :lr],
-             self.n_hat[: 2 * lr, :lr].T],
+            [
+                self.m_hat[:lr2, :lr],
+                self.s_hat[:lr, :lr],
+                self.n_hat[: 2 * lr, :lr].T,
+            ],
         )
         # self.s_hat.zero_()
         self.s_hat[:lr2, :lr2] = s

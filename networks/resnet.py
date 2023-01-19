@@ -12,12 +12,12 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim
+import torch.optim.lr_scheduler as lr_schedules
 import torch.utils.data.distributed
 import torchvision.models as models
 from PIL import ImageFile
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.lr_scheduler import StepLR
-import torch.optim.lr_scheduler as lr_schedules
 from torch.utils.data import Subset
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -30,6 +30,7 @@ from rich import print as rprint
 from rich.columns import Columns
 
 from rich.console import Console
+
 console = Console(width=140)
 
 # import cProfile, pstats, io
@@ -40,7 +41,7 @@ import pytorch_warmup as warmup
 
 import mlflow
 import mlflow.pytorch
-import random
+
 
 class ToyNet(nn.Module):
     def __init__(self):
@@ -191,7 +192,7 @@ parser.add_argument(
     "--adaptive",
     default=False,
     type=bool,
-    help="use adaptive training?"
+    help="use adaptive training?",
 )
 
 best_acc1 = 0
@@ -267,14 +268,14 @@ def main(args):  # noqa: C901
             "lr": args.lr,
             "momentum": args.momentum,
             "weight_decay": args.weight_decay,
-            'nesterov': nesterov,
+            "nesterov": nesterov,
         },
         adaptive=args.adaptive,
         criterion=nn.CrossEntropyLoss().to(device),
         init_ddp=dist.is_initialized(),
         mixed_precision=mixed,
         rank_percent=rank_percent,
-        epsilon={"linear": eps_linear, "conv2d": eps_conv}
+        epsilon={"linear": eps_linear, "conv2d": eps_conv},
     )
     print(dlrt_trainer.model.model)
     if args.rank == 0:
@@ -310,7 +311,7 @@ def main(args):  # noqa: C901
             "mixed_precision": mixed,
             "warmup_period": warmup_period,
             "dataset": os.environ["DATASET"],
-        }
+        },
     )
 
     # optionally resume from a checkpoint
@@ -360,7 +361,7 @@ def main(args):  # noqa: C901
         if args.rank == 0:
             console.rule(f"Begin epoch {epoch} LR: {dlrt_trainer.optimizer.param_groups[0]['lr']}")
             mlflow.log_metrics(
-                metrics={"lr": dlrt_trainer.optimizer.param_groups[0]['lr']},
+                metrics={"lr": dlrt_trainer.optimizer.param_groups[0]["lr"]},
                 step=epoch,
             )
         if dist.is_initialized():
@@ -371,8 +372,15 @@ def main(args):  # noqa: C901
         # pr.enable()
         # # profiling =====================
 
-        train_loss = train(train_loader, dlrt_trainer, epoch, device, args,
-            skip_adapt=skip_adapt, warmup_scheduler=warmup_scheduler)
+        train_loss = train(
+            train_loader,
+            dlrt_trainer,
+            epoch,
+            device,
+            args,
+            skip_adapt=skip_adapt,
+            warmup_scheduler=warmup_scheduler,
+        )
         # train_loss = train_baseline(train_loader, optimizer, model, criterion, epoch, device,
         #     args, warmup_scheduler=warmup_scheduler
         # )
@@ -449,7 +457,7 @@ def train_baseline(train_loader, optimizer, model, criterion, epoch, device, arg
             console.print(
                 f"Argmax outputs s "
                 f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
-                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
+                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}",
             )
             progress.display(i + 1)
     if args.rank == 0:
@@ -490,7 +498,8 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args, warmup_s
         #     images, target, skip_adapt=skip_adapt  # i < 100 and i % 50 != 0
         # )
         koutput, loutput, soutput, combi = trainer.train_step_abs(
-            images, target,   # i < 100 and i % 50 != 0
+            images,
+            target,  # i < 100 and i % 50 != 0
         )
         # print(output.output.shape, target.shape)
         # argmax = torch.argmax(koutput.output, dim=1).to(torch.float32)
@@ -522,7 +531,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args, warmup_s
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-        #if i == 2:
+        # if i == 2:
         #    raise RuntimeError("asdf")
         #    break
         if i < len(train_loader) - 1 and warmup_scheduler is not None:
@@ -535,19 +544,19 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args, warmup_s
             console.print(
                 f"Argmax outputs k "
                 f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
-                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
+                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}",
             )
             argmax = torch.argmax(loutput.output, dim=1).to(torch.float32)
             console.print(
                 f"Argmax outputs l "
                 f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
-                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
+                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}",
             )
             argmax = torch.argmax(soutput.output, dim=1).to(torch.float32)
             console.print(
                 f"Argmax outputs s "
                 f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
-                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
+                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}",
             )
             progress.display(i + 1)
     if args.rank == 0:
@@ -638,8 +647,11 @@ def validate_baseline(val_loader, model, criterion, args, epoch):
 
     if args.rank == 0:
         mlflow.log_metrics(
-            metrics={"val loss": losses.avg, "val top1": top1.avg.item(),
-                     "val top5": top5.avg.item()},
+            metrics={
+                "val loss": losses.avg,
+                "val top1": top1.avg.item(),
+                "val top5": top5.avg.item(),
+            },
             step=epoch,  # logging right at the end of the
             # last epoch
         )
@@ -649,6 +661,7 @@ def validate_baseline(val_loader, model, criterion, args, epoch):
 
 def validate(val_loader, trainer: dlrt.DLRTTrainer, args, epoch, train_len):
     console.rule("validation")
+
     def run_validate(loader, base_progress=0):
         rank = 0 if not dist.is_initialized() else dist.get_rank()
         with torch.no_grad():
@@ -723,8 +736,11 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args, epoch, train_len):
 
     if args.rank == 0:
         mlflow.log_metrics(
-            metrics={"val loss": losses.avg, "val top1": top1.avg.item(),
-                     "val top5": top5.avg.item()},
+            metrics={
+                "val loss": losses.avg,
+                "val top1": top1.avg.item(),
+                "val top5": top5.avg.item(),
+            },
             step=epoch,  # logging right at the end of the
             # last epoch
         )
@@ -848,12 +864,11 @@ if __name__ == "__main__":
     mlflow.set_tracking_uri("file:/hkfs/work/workspace/scratch/qv2382-dlrt/mlflow/")
     experiment = mlflow.set_experiment(args.arch)
     # run_id -> adaptive needs to be unique, roll random int?
-    run_name = f"4gpu-batchhalf-" \
-               f"-{os.environ['SLURM_JOBID']}"
+    run_name = f"4gpu-batchhalf-" f"-{os.environ['SLURM_JOBID']}"
     with mlflow.start_run():
-        mlflow.log_param("Slurm jobid", os.environ['SLURM_JOBID'])
+        mlflow.log_param("Slurm jobid", os.environ["SLURM_JOBID"])
         mlflow.set_tag("mlflow.runName", run_name)
         print("run_name:", run_name)
-        print('tracking uri:', mlflow.get_tracking_uri())
-        print('artifact uri:', mlflow.get_artifact_uri())
+        print("tracking uri:", mlflow.get_tracking_uri())
+        print("artifact uri:", mlflow.get_artifact_uri())
         main(args)

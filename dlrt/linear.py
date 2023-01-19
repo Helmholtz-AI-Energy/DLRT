@@ -5,11 +5,12 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
-from torch import Tensor
 from rich import print
 from rich.columns import Columns
 from rich.console import Console
 from rich.pretty import Pretty
+from torch import Tensor
+
 console = Console(width=140)
 
 from .basic import DLRTModule
@@ -158,29 +159,40 @@ class DLRTLinearFixed(DLRTModule):
     def print_means(self):
         shapes = []
         shapes.append(f"k: {self.k.mean():.4f} {self.k.min():.4f} {self.k.max():.4f} {self.k.requires_grad}")
-        shapes.append(f"s: {self.s.mean():.4f} {self.s.min():.4f} {self.s.max():.4f} "
-                      f"{self.s.requires_grad}")
-        shapes.append(f"lt: {self.lt.mean():.4f} {self.lt.min():.4f} {self.lt.max():.4f}"
-                      f" {self.lt.requires_grad}")
-        shapes.append(f"u: {self.u.mean():.4f} {self.u.min():.4f} {self.u.max():.4f} "
-                      f"{self.u.requires_grad}")
+        shapes.append(
+            f"s: {self.s.mean():.4f} {self.s.min():.4f} {self.s.max():.4f} " f"{self.s.requires_grad}",
+        )
+        shapes.append(
+            f"lt: {self.lt.mean():.4f} {self.lt.min():.4f} {self.lt.max():.4f}" f" {self.lt.requires_grad}",
+        )
+        shapes.append(
+            f"u: {self.u.mean():.4f} {self.u.min():.4f} {self.u.max():.4f} " f"{self.u.requires_grad}",
+        )
         shapes.append(
             f"unp1: {self.unp1.mean():.4f} {self.unp1.min():.4f} "
-            f"{self.unp1.max():.4f} {self.unp1.requires_grad}")
-        shapes.append(f"vt: {self.vt.mean():.4f} {self.vt.min():.4f} {self.vt.max():.4f}"
-                      f" {self.vt.requires_grad}")
-        shapes.append(f"vtnp1: {self.vtnp1.mean():.4f} {self.vtnp1.min():.4f} "
-                      f"{self.vtnp1.max():.4f} {self.vtnp1.requires_grad}")
-        shapes.append(f"n: {self.n.mean():.4f} {self.n.min():.4f} "
-                      f"{self.n.max():.4f} {self.n.requires_grad}")
-        shapes.append(f"m: {self.m.mean():.4f} {self.m.min():.4f} "
-                      f"{self.m.max():.4f} {self.m.requires_grad}")
+            f"{self.unp1.max():.4f} {self.unp1.requires_grad}",
+        )
+        shapes.append(
+            f"vt: {self.vt.mean():.4f} {self.vt.min():.4f} {self.vt.max():.4f}" f" {self.vt.requires_grad}",
+        )
+        shapes.append(
+            f"vtnp1: {self.vtnp1.mean():.4f} {self.vtnp1.min():.4f} "
+            f"{self.vtnp1.max():.4f} {self.vtnp1.requires_grad}",
+        )
+        shapes.append(
+            f"n: {self.n.mean():.4f} {self.n.min():.4f} " f"{self.n.max():.4f} {self.n.requires_grad}",
+        )
+        shapes.append(
+            f"m: {self.m.mean():.4f} {self.m.min():.4f} " f"{self.m.max():.4f} {self.m.requires_grad}",
+        )
         if self.bias is not None:
-            shapes.append(f"bias: {self.bias.mean():.4f} {self.bias.min():.4f} "
-                          f"{self.bias.max():.4f} {self.bias.requires_grad}")
-        #if self.rank == 0: # and self.counter % 100 == 0:
+            shapes.append(
+                f"bias: {self.bias.mean():.4f} {self.bias.min():.4f} "
+                f"{self.bias.max():.4f} {self.bias.requires_grad}",
+            )
+        # if self.rank == 0: # and self.counter % 100 == 0:
         columns = Columns(shapes, equal=True, expand=True)
-        #console.rule("All shapes in linear")
+        # console.rule("All shapes in linear")
         console.print(columns)
 
     def get_classic_weight_repr(self):
@@ -420,7 +432,7 @@ class DLRTLinearAdaptive(DLRTModule):
         nn.init.kaiming_uniform_(self.n, a=math.sqrt(5))
         nn.init.kaiming_uniform_(self.m, a=math.sqrt(5))
         if self.bias is not None:
-            w = torch.linalg.multi_dot([self.k, self.s[:self.rmax, :self.rmax], self.lt])
+            w = torch.linalg.multi_dot([self.k, self.s[: self.rmax, : self.rmax], self.lt])
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(w)
             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
             nn.init.uniform_(self.bias, -bound, bound)
@@ -489,7 +501,7 @@ class DLRTLinearAdaptive(DLRTModule):
         self._change_params_requires_grad(False)
         s = self.s[: self.low_rank, : self.low_rank]
         # self.lt.zero_()
-        self.lt[:self.low_rank] = s @ self.vt[: self.low_rank]
+        self.lt[: self.low_rank] = s @ self.vt[: self.low_rank]
         self.lt.requires_grad = True
         self.lt.training = True
 
@@ -507,7 +519,7 @@ class DLRTLinearAdaptive(DLRTModule):
         self.unp1[:, :lr2] = prev_u
         #   used in setting s,
         # self.n.zero_()
-        self.n[: lr2, :lr] = self.unp1[:, :lr2].T @ self.u[:, :lr]
+        self.n[:lr2, :lr] = self.unp1[:, :lr2].T @ self.u[:, :lr]
 
     @torch.no_grad()
     def l_postprocess(self):

@@ -121,7 +121,8 @@ class DLRTTrainer:
         self.model.run_preprocess(case)
         self.optimizer.zero_grad()  # set_to_none=True)
         if self.mixed_precision:
-            scaler = getattr(self, f"kscaler")
+            scaler = getattr(self, "kscaler")
+            # scaler = getattr(self, f"{case}scaler")
             with torch.autocast(device_type="cuda", dtype=torch.float16):
                 output = self.model(inputs, case)
                 loss = self.criterion(output, labels)
@@ -174,14 +175,20 @@ class DLRTTrainer:
 
         self.counter += 1
         combiout = None  # torch.cat([koutput, loutput, soutput], dim=0)
-        combiloss = (kloss + lloss + sloss) / 3.
-        return self.return_tuple(kloss, koutput), self.return_tuple(
-            lloss, loutput
-        ), self.return_tuple(sloss, soutput), self.return_tuple(combiloss, combiout)
+        combiloss = (kloss + lloss + sloss) / 3.0
+        return (
+            self.return_tuple(kloss, koutput),
+            self.return_tuple(
+                lloss,
+                loutput,
+            ),
+            self.return_tuple(sloss, soutput),
+            self.return_tuple(combiloss, combiout),
+        )
 
     @torch.no_grad()
     def valid_step(self, model_inputs, labels):
         # TODO: which stage should this be? k? l? s?
-        sret = self.model(model_inputs, 's')
+        sret = self.model(model_inputs, "s")
         ls = self.criterion(sret, labels)
         return self.return_tuple(ls, sret)

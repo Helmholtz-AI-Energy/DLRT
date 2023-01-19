@@ -195,8 +195,7 @@ class DLRTNetwork(nn.Module):
                 command="change_training_case",
                 kwargs={"case": case},
             )
-            #self.__run_command_on_dlrt_layers(module=m, command="train")
-
+            # self.__run_command_on_dlrt_layers(module=m, command="train")
 
     def run_preprocess(self, case):
         # prev: getattr(self, f"{case}model")
@@ -211,11 +210,11 @@ class DLRTNetwork(nn.Module):
     def train(self, mode: bool = True):
         if not isinstance(mode, bool):
             raise ValueError("training mode is expected to be boolean")
-        #self.model.training = mode
+        # self.model.training = mode
         self.model.training = mode
-        #self._train(self.model, mode)
+        # self._train(self.model, mode)
         for module in self.model.children():
-            #print(module)
+            # print(module)
             module.train(mode)
         # todo: recursse deeper...?
         # TODO: fix me in DDP?? (do this on k/l/s models?)
@@ -224,12 +223,11 @@ class DLRTNetwork(nn.Module):
 
     def _train(self, module, mode=True):
         module.train(mode)
-        #module.training = mode
+        # module.training = mode
         for n, child in module.named_children():
-            #print(n, child.training)
-            #child.train(mode)
+            # print(n, child.training)
+            # child.train(mode)
             self._train(child)
-
 
     def eval(self):
         return self.train(False)
@@ -266,5 +264,5 @@ class DLRTNetwork(nn.Module):
         return out_ranks
 
     def __call__(self, inputs, case):
-        #return self.model(inputs)
+        # return self.model(inputs)
         return getattr(self, f"{case}model")(inputs)
