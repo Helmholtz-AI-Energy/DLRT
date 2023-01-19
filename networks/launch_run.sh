@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 ### #SBATCH --gpus-per-task=1
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --job-name=dlrt-ddp
 #SBATCH --partition=accelerated
 #SBATCH --account=haicore-project-scc
@@ -72,6 +72,6 @@ echo "config: ${CONFIG}"
 #    bash -c python resnet.py --data=${DATA_PREFIX} --world-size=${SLURM_NTASKS}"
 srun "${SRUN_PARAMS[@]}" singularity exec --nv \
   --bind "${DATA_PREFIX}","${SCRIPT_DIR}","/scratch","/tmp","/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/dlrt/":"/opt/conda/lib/python3.8/site-packages/dlrt/" "${SINGULARITY_FILE}" \
-    bash -c "python -u resnet.py --data=${DATA_PREFIX} -b 512 -p 10 --lr 0.1 --momentum 0.1 -a resnet18 --adaptive True"
+    bash -c "python -u resnet.py --data=${DATA_PREFIX} -b 512 -p 10 --lr 0.1 --momentum 0.01 -a resnet18 --adaptive 1"
 
 #toynet"

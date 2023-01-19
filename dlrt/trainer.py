@@ -13,7 +13,7 @@ from rich.pretty import Pretty
 
 from .network import DLRTNetwork
 
-console = Console(width=120)
+console = Console(width=140)
 
 __all__ = ["DLRTTrainer"]
 
@@ -62,12 +62,12 @@ class DLRTTrainer:
             rank_percent=rank_percent,
             adaptive=adaptive,
             epsilon=epsilon,
-            dense_last_layer=False,
+            dense_last_layer=True,
             init_ddp=init_ddp,
         )
 
         # need to rinit the optimizer with the new DLRT parameters
-        optimizer_kwargs["params"] = self.model.parameters()
+        optimizer_kwargs["params"] = self.model.model.parameters()
         self.optimizer = getattr(torch.optim, optimizer_name)(**optimizer_kwargs)
         print(Pretty({"Optimizer": optimizer_name, **optimizer_kwargs}))
         # todo: autocast
@@ -111,19 +111,33 @@ class DLRTTrainer:
         self.output = output
         return loss, output
 
-    def train_step_new(self, inputs, labels, skip_adapt=False):
-        # requires_grad = []
-        # for n, m in self.model.model.named_parameters():
-        #     if n.startswith("fc1"):  # m.requires_grad:
-        #         requires_grad.append(
-        #                 f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-        #             )
-        # if self.rank == 0:  # and self.counter % 100 == 0:
-        #     columns = Columns(requires_grad, equal=True, expand=True)
-        #     console.rule("top of train step")
-        #     console.print(columns)
-        # ================= start k ======
+    def _run_model2(self, inputs, labels, case):
+        # Steps:
+        #   1. set layer case
+        #   2. preprocess for that case (post process will be done in training step fn
+        #   3. run forward/backward/opt step
+        #   4. return
+        self.model.set_layer_case(case)
+        self.model.run_preprocess(case)
+        self.optimizer.zero_grad()  # set_to_none=True)
+        if self.mixed_precision:
+            scaler = getattr(self, f"kscaler")
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                output = self.model(inputs, case)
+                loss = self.criterion(output, labels)
+            scaler.scale(loss).backward()
+            # nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
+            scaler.step(self.optimizer)
+            scaler.update()
+        else:
+            output = self.model(inputs, case)
+            loss = self.criterion(output, labels)
+            loss.backward()
+            # nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
+            self.optimizer.step()
+        return loss, output
 
+    def train_step_abs(self, inputs, labels):
         fact = {"device": inputs.device, "dtype": inputs.dtype}
         self.kloss, self.lloss, self.sloss = (
             torch.tensor(0, **fact),
@@ -131,185 +145,43 @@ class DLRTTrainer:
             torch.tensor(0, **fact),
         )
         self.output = None
-        #print("all models true?", self.model.model == self.model.kmodel, self.model.kmodel == self.model.lmodel, self.model.smodel == self.model.kmodel)
+        # TODO: splitting the batch into 3 sections...
+        half = inputs.shape[0] // 2
+        # third2 = third * 2
         # ===== k step ====================
-        #console.rule("k")
-        self.model.set_layer_case("k")
-        self.model.run_preprocess("k")
-        self.optimizer.zero_grad(set_to_none=True)
-        koutput = self.model(inputs, "k")
-        kloss = self.criterion(koutput, labels)
-        kloss.backward()
-        # nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
-        self.optimizer.step()
-        # NOTE: K postprocess must be run AFTER l step
-        # self.model.run_postprocess("k")
-
-        # requires_grad = []
-        # for n, m in self.model.model.named_parameters():
-        #     if n.startswith("fc1"):  # m.requires_grad:
-        #         requires_grad.append(
-        #                 f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-        #             )
-        # if self.rank == 0:  # and self.counter % 100 == 0:
-        #     columns = Columns(requires_grad, equal=True, expand=True)
-        #     console.rule("after k")
-        #     console.print(columns)
+        kloss, koutput = self._run_model2(inputs[:half], labels[:half], case="k")
+        # kloss, koutput = self._run_model2(inputs, labels, case="k")
         # # ==== end k ==== start l ======
         # console.rule("l")
-        self.model.set_layer_case("l")
-        self.model.run_preprocess("l")
-        self.optimizer.zero_grad(set_to_none=True)  # TODO: True of False?
-        loutput = self.model(inputs, "l")
-        lloss = self.criterion(loutput, labels)
-        lloss.backward()
-        # nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
-        self.optimizer.step()
+        lloss, loutput = self._run_model2(inputs[half:], labels[half:], case="l")
+        # lloss, loutput = self._run_model2(inputs, labels, case="l")
 
         # post process for both k and l
         self.model.run_postprocess("k")
         self.model.run_postprocess("l")
-
-        # requires_grad = []
-        # for n, m in self.model.model.named_parameters():
-        #     if n.startswith("fc1"):  # m.requires_grad:
-        #         requires_grad.append(
-        #                 f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-        #         )
-        # if self.rank == 0:  # and self.counter % 100 == 0:
-        #     columns = Columns(requires_grad, equal=True, expand=True)
-        #     console.rule("after l")
-        #     console.print(columns)
-
         # === end l === start s ===
-        # console.rule("s")
-        self.model.set_layer_case("s")
-        self.model.run_preprocess("s")
-        self.optimizer.zero_grad()
-        soutput = self.model(inputs, "s")
-        sloss = self.criterion(soutput, labels)
-        sloss.backward()
-        # nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
-        self.optimizer.step()
-
-        # requires_grad = []
-        # for n, m in self.model.model.named_parameters():
-        #     if n.startswith("fc1"):  # m.requires_grad:
-        #         requires_grad.append(
-        #                 f"{n}, {m.mean().item():.4f}, {m.max().item():.4f}, {m.min().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-        #             )
-        # if self.rank == 0:  # and self.counter % 100 == 0:
-        #     columns = Columns(requires_grad, equal=True, expand=True)
-        #     console.rule("After s")
-        #     console.print(columns)
-
-        # s postprocess is rank adaptation
+        # sloss, soutput = self._run_model2(inputs, labels, case="s")
+        sloss, soutput = self._run_model2(inputs, labels, case="s")
+        # rank adaptation
         if self.adaptive:
-            self.model.run_rank_adaption(skip_adapt)
+            self.model.run_rank_adaption()
 
-            if self.rank == 0 and self.counter % 10 == 0 and not skip_adapt:
+            if self.rank == 0 and self.counter % 10 == 0:
                 console.rule(f"After rank adaptation - {self.counter}")
                 columns = Columns(self.model.get_all_ranks(), equal=True, expand=True)
                 console.print(columns)
                 console.rule()
 
         self.counter += 1
-        return self.return_tuple(kloss, koutput), self.return_tuple(lloss, loutput), self.return_tuple(sloss, soutput)
-
-    def train_step(self, inputs, labels, skip_adapt=False):
-        # console.rule("top of train step")
-        # TODO: remove this after debug...
-        fact = {"device": inputs.device, "dtype": inputs.dtype}
-        self.kloss, self.lloss, self.sloss = (
-            torch.tensor(0, **fact),
-            torch.tensor(0, **fact),
-            torch.tensor(0, **fact),
-        )
-        self.output = None
-        self.optimizer.zero_grad()
-        for case in ["k", "l"]:
-            self.model.set_layer_case(case)
-            # self.model.run_preprocess(case)
-            requires_grad = []
-            self._run_model(inputs, labels, case)
-            # for n, m in self.model.model.named_parameters():
-            #    if n.startswith("conv"):  # m.requires_grad:
-            #        requires_grad.append(
-            #            f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-            #        )
-            # if self.rank == 0:# and self.counter % 100 == 0:
-            #    columns = Columns(requires_grad, equal=True, expand=True)
-            #    console.rule(f"After {case}")
-            #    console.print(columns)
-            # self._run_model(inputs, labels, case)
-        if self.kscaler is not None:
-            self.kscaler.step(self.optimizer)
-            self.kscaler.update()
-        else:
-            self.optimizer.step()
-        self.optimizer.zero_grad()
-
-        self.model.run_postprocess("k")
-        self.model.run_postprocess("l")
-
-        requires_grad = []
-        for n, m in self.model.model.named_parameters():
-            if n.startswith("fc"):  # m.requires_grad:
-                requires_grad.append(
-                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-                )
-        if self.rank == 0:  # and self.counter % 100 == 0:
-            columns = Columns(requires_grad, equal=True, expand=True)
-            # console.rule("After k/l steps")
-            # console.print(columns)
-
-        self.model.set_layer_case("s")
-
-        self.optimizer.zero_grad()
-        #            "{m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}"
-        #        )
-        # if self.rank == 0: # and self.counter % 100 == 0:
-        #    columns = Columns(requires_grad, equal=True, expand=True)
-        #    console.rule("Before s")
-        #    console.print(columns)
-
-        self._run_model(inputs, labels, "s")
-        if self.kscaler is not None:
-            self.kscaler.step(self.optimizer)
-            self.kscaler.update()
-        else:
-            self.optimizer.step()
-
-        if self.adaptive and self.counter > 100:
-            self.model.run_rank_adaption(skip_adapt)
-
-            if self.rank == 0 and self.counter % 100 == 0 and not skip_adapt:
-                console.rule(f"After rank adaptation - {self.counter}")
-                columns = Columns(self.model.get_all_ranks(), equal=True, expand=True)
-                console.print(columns)
-
-        self.counter += 1
-        requires_grad = []
-        for n, m in self.model.model.named_parameters():
-            if n.startswith("fc"):  # m.requires_grad:
-                requires_grad.append(
-                    f"{n}, {m.max().item():.4f}, {m.min().item():.4f}, {m.mean().item():.4f}, {m.std().item():.4f}, {m.requires_grad}",
-                )
-        if self.rank == 0:  # and self.counter % 100 == 0:
-            columns = Columns(requires_grad, equal=True, expand=True)
-            # console.rule(f"After s train step")
-            # console.print(columns)
-
-        # print("losses", self.kloss.item(), self.lloss.item(), self.sloss.item())
-        # console.rule("end of train step")
-        return self.return_tuple(self.sloss, self.output)
+        combiout = None  # torch.cat([koutput, loutput, soutput], dim=0)
+        combiloss = (kloss + lloss + sloss) / 3.
+        return self.return_tuple(kloss, koutput), self.return_tuple(
+            lloss, loutput
+        ), self.return_tuple(sloss, soutput), self.return_tuple(combiloss, combiout)
 
     @torch.no_grad()
     def valid_step(self, model_inputs, labels):
-        # TODO: fix me! need to repair this to perform with eval!
-        # self.model.set_layer_case("s")
-        # self.run_preprocess(case="s")
-        # console.rule("valid step")
+        # TODO: which stage should this be? k? l? s?
         sret = self.model(model_inputs, 's')
         ls = self.criterion(sret, labels)
         return self.return_tuple(ls, sret)

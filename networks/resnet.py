@@ -17,6 +17,7 @@ import torchvision.models as models
 from PIL import ImageFile
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.lr_scheduler import StepLR
+import torch.optim.lr_scheduler as lr_schedules
 from torch.utils.data import Subset
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -34,6 +35,8 @@ console = Console(width=140)
 # import cProfile, pstats, io
 # from pstats import SortKey
 # pr = cProfile.Profile()
+
+import pytorch_warmup as warmup
 
 import mlflow
 import mlflow.pytorch
@@ -241,32 +244,21 @@ def main(args):  # noqa: C901
     # optimizer = torch.optim.SGD(
     #     model.parameters(), args.lr,
     #     momentum=args.momentum,
-    #     weight_decay=args.weight_decay
+    #     weight_decay=args.weight_decay,
+    #     nesterov=True,
     # )
+
     # print("converting model to DLRT")
     # print(model)
 
     optimizer = "SGD"
     nesterov = True
     skip_adapt = False
-    rank_percent = 0.5
-    eps_linear = 0.01
-    eps_conv = 0.01
-    mlflow.log_params(
-        {
-            "optimizer": optimizer,
-            "nesterov": nesterov,
-            "lr": args.lr,
-            "momentum": args.momentum,
-            "weight_decay": args.weight_decay,
-            "skip_adapt": skip_adapt,
-            "rank_percent": rank_percent,
-            "loss fn": "CrossEntropy",
-            "adaptive": args.adaptive,
-            "eps_linear": eps_linear,
-            "eps_conv": eps_conv,
-        }
-    )
+    rank_percent = 0.4
+    eps_linear = 0.1
+    eps_conv = 0.1
+    mixed = True
+    warmup_period = 200
 
     dlrt_trainer = dlrt.DLRTTrainer(
         torch_model=model,
@@ -280,7 +272,7 @@ def main(args):  # noqa: C901
         adaptive=args.adaptive,
         criterion=nn.CrossEntropyLoss().to(device),
         init_ddp=dist.is_initialized(),
-        mixed_precision=False,
+        mixed_precision=mixed,
         rank_percent=rank_percent,
         epsilon={"linear": eps_linear, "conv2d": eps_conv}
     )
@@ -293,7 +285,33 @@ def main(args):  # noqa: C901
     # print(dlrt_trainer)
 
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    # scheduler = ReduceLROnPlateau(dlrt_trainer.optimizer, patience=5, threshold=1e-3)
     scheduler = StepLR(dlrt_trainer.optimizer, step_size=30, gamma=0.1)
+    # scheduler = lr_schedules.ExponentialLR(dlrt_trainer.optimizer, gamma=0.9)
+    warmup_scheduler = warmup.LinearWarmup(dlrt_trainer.optimizer, warmup_period=warmup_period)
+    # scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
+    # warmup_scheduler = warmup.LinearWarmup(optimizer, warmup_period=warmup_period)
+
+    mlflow.log_params(
+        {
+            "optimizer": dlrt_trainer.optimizer,
+            "lr": args.lr,
+            "scheduler": scheduler,
+            "warmup_schedule": warmup_scheduler,
+            "nesterov": nesterov,
+            "momentum": args.momentum,
+            "weight_decay": args.weight_decay,
+            "skip_adapt": skip_adapt,
+            "rank_percent": rank_percent,
+            "loss fn": "CrossEntropy",
+            "adaptive": args.adaptive,
+            "eps_linear": eps_linear,
+            "eps_conv": eps_conv,
+            "mixed_precision": mixed,
+            "warmup_period": warmup_period,
+            "dataset": os.environ["DATASET"],
+        }
+    )
 
     # optionally resume from a checkpoint
     # TODO: add DLRT checkpointing
@@ -335,11 +353,16 @@ def main(args):  # noqa: C901
     train_loader, train_sampler = dset_dict["train"]["loader"], dset_dict["train"]["sampler"]
     val_loader = dset_dict["val"]["loader"]
 
-    if args.evaluate:
-        validate(val_loader, dlrt_trainer, args)
-        return
-
+    # if args.evaluate:
+    #     validate(val_loader, dlrt_trainer, args)
+    #     return
     for epoch in range(args.start_epoch, args.epochs):
+        if args.rank == 0:
+            console.rule(f"Begin epoch {epoch} LR: {dlrt_trainer.optimizer.param_groups[0]['lr']}")
+            mlflow.log_metrics(
+                metrics={"lr": dlrt_trainer.optimizer.param_groups[0]['lr']},
+                step=epoch,
+            )
         if dist.is_initialized():
             train_sampler.set_epoch(epoch)
 
@@ -348,7 +371,11 @@ def main(args):  # noqa: C901
         # pr.enable()
         # # profiling =====================
 
-        train_loss = train(train_loader, dlrt_trainer, epoch, device, args, skip_adapt=skip_adapt)
+        train_loss = train(train_loader, dlrt_trainer, epoch, device, args,
+            skip_adapt=skip_adapt, warmup_scheduler=warmup_scheduler)
+        # train_loss = train_baseline(train_loader, optimizer, model, criterion, epoch, device,
+        #     args, warmup_scheduler=warmup_scheduler
+        # )
         # # profiling =====================
         # pr.disable()
         # s = io.StringIO()
@@ -360,17 +387,82 @@ def main(args):  # noqa: C901
         # # profiling =====================
 
         # evaluate on validation set
-        _ = validate(val_loader, dlrt_trainer, args)
+        _ = validate(val_loader, dlrt_trainer, args, epoch, len(train_loader))
+        # _ = validate_baseline(val_loader, model, criterion, args, epoch)
 
-        if isinstance(scheduler, ReduceLROnPlateau):
-            scheduler.step(train_loss)
-        else:  # StelLR / others
-            scheduler.step()
-        if args.rank == 0:
-            print(dlrt_trainer.optimizer.param_groups[0]["lr"])
+        with warmup_scheduler.dampening():
+            if isinstance(scheduler, ReduceLROnPlateau):
+                scheduler.step(train_loss)
+            else:  # StelLR / others
+                scheduler.step()
+                # print(optimizer.param_groups[0]["lr"])
 
 
-def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args, skip_adapt=True):
+def train_baseline(train_loader, optimizer, model, criterion, epoch, device, args, warmup_scheduler):
+    batch_time = AverageMeter("Time", ":6.3f")
+    data_time = AverageMeter("Data", ":6.3f")
+    losses = AverageMeter("Loss", ":.4f")
+    top1 = AverageMeter("Acc@1", ":6.2f")
+    top5 = AverageMeter("Acc@5", ":6.2f")
+    progress = ProgressMeter(
+        len(train_loader),
+        [batch_time, data_time, losses, top1, top5],
+        prefix=f"Epoch: [{epoch}]",
+    )
+
+    # switch to train mode
+    model.train()
+    # rank = dist.get_rank()
+    end = time.time()
+    for i, (images, target) in enumerate(train_loader):
+        optimizer.zero_grad()
+        # measure data loading time
+        data_time.update(time.time() - end)
+
+        # move data to the same device as model
+        images = images.to(device, non_blocking=True)
+        target = target.to(device, non_blocking=True)
+        output = model(images)
+        loss = criterion(output, target)
+        loss.backward()
+        optimizer.step()
+
+        # measure accuracy and record loss
+        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        losses.update(loss.item(), images.size(0))
+        top1.update(acc1[0], images.size(0))
+        top5.update(acc5[0], images.size(0))
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+        # if i == 2:
+        #    raise RuntimeError("asdf")
+        #    break
+        if i < len(train_loader) - 1 and warmup_scheduler is not None:
+            with warmup_scheduler.dampening():
+                pass
+
+        if (i % args.print_freq == 0 or i == len(train_loader) - 1) and args.rank == 0:
+            # console.rule(f"train step {i}")
+            argmax = torch.argmax(output, dim=1).to(torch.float32)
+            console.print(
+                f"Argmax outputs s "
+                f"mean: {argmax.mean().item():.5f}, max: {argmax.max().item():.5f}, "
+                f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
+            )
+            progress.display(i + 1)
+    if args.rank == 0:
+        mlflow.log_metrics(
+            metrics={"train loss": losses.avg, "train top1": top1.avg.item(), "train top5": top5.avg.item()},
+            step=epoch,
+        )
+    if dist.is_initialized():
+        losses.all_reduce()
+    return losses.avg
+
+
+def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args, warmup_scheduler, skip_adapt=True):
     batch_time = AverageMeter("Time", ":6.3f")
     data_time = AverageMeter("Data", ":6.3f")
     losses = AverageMeter("Loss", ":.4f")
@@ -394,8 +486,11 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args, skip_ada
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
         # console.rule(f"step {i}")
-        koutput, loutput, soutput = trainer.train_step_new(
-            images, target, skip_adapt=skip_adapt  # i < 100 and i % 50 != 0
+        # koutput, loutput, soutput = trainer.train_step_new(
+        #     images, target, skip_adapt=skip_adapt  # i < 100 and i % 50 != 0
+        # )
+        koutput, loutput, soutput, combi = trainer.train_step_abs(
+            images, target,   # i < 100 and i % 50 != 0
         )
         # print(output.output.shape, target.shape)
         # argmax = torch.argmax(koutput.output, dim=1).to(torch.float32)
@@ -415,10 +510,12 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args, skip_ada
         #     f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
         # )
         if torch.isnan(soutput.loss):
-            raise ValueError("NaN loss")
+            raise ValueError("NaN loss", soutput.output)
         # measure accuracy and record loss
         acc1, acc5 = accuracy(soutput.output, target, topk=(1, 5))
-        losses.update(soutput.loss.item(), images.size(0))
+        # acc1, acc5 = accuracy(combi.output, target, topk=(1, 5))
+        # losses.update(soutput.loss.item(), images.size(0))
+        losses.update(combi.loss.item(), images.size(0))
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
 
@@ -428,6 +525,9 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args, skip_ada
         #if i == 2:
         #    raise RuntimeError("asdf")
         #    break
+        if i < len(train_loader) - 1 and warmup_scheduler is not None:
+            with warmup_scheduler.dampening():
+                pass
 
         if (i % args.print_freq == 0 or i == len(train_loader) - 1) and args.rank == 0:
             # console.rule(f"train step {i}")
@@ -450,16 +550,104 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, args, skip_ada
                 f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}"
             )
             progress.display(i + 1)
-            mlflow.log_metrics(
-                metrics={"train loss": losses.avg, "train top1": top1.avg.item(), "train top5": top5.avg.item()},
-                step=trainer.counter,
-            )
+    if args.rank == 0:
+        mlflow.log_metrics(
+            metrics={"train loss": losses.avg, "train top1": top1.avg.item(), "train top5": top5.avg.item()},
+            step=epoch,
+        )
     if dist.is_initialized():
         losses.all_reduce()
     return losses.avg
 
 
-def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
+def validate_baseline(val_loader, model, criterion, args, epoch):
+    console.rule("validation")
+
+    def run_validate(loader, base_progress=0):
+        rank = 0 if not dist.is_initialized() else dist.get_rank()
+        with torch.no_grad():
+            end = time.time()
+            num_elem = len(loader) - 1
+            for i, (images, target) in enumerate(loader):
+                i = base_progress + i
+                images = images.cuda(args.gpu, non_blocking=True)
+                target = target.cuda(args.gpu, non_blocking=True)
+
+                # compute output
+                output = model(images)
+                loss = criterion(output, target)
+                # argmax = torch.argmax(output.output, dim=1).to(torch.float32)
+                # print(
+                #     f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}",
+                # )
+
+                # measure accuracy and record loss
+                acc1, acc5 = accuracy(output, target, topk=(1, 5))
+                losses.update(loss.item(), images.size(0))
+                top1.update(acc1[0], images.size(0))
+                top5.update(acc5[0], images.size(0))
+
+                # measure elapsed time
+                batch_time.update(time.time() - end)
+                end = time.time()
+
+                if (i % args.print_freq == 0 or i == num_elem) and rank == 0:
+                    argmax = torch.argmax(output, dim=1).to(torch.float32)
+                    print(
+                        f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}",
+                    )
+                    progress.display(i + 1)
+
+    batch_time = AverageMeter("Time", ":6.3f", Summary.NONE)
+    losses = AverageMeter("Loss", ":.4f", Summary.NONE)
+    top1 = AverageMeter("Acc@1", ":6.2f", Summary.AVERAGE)
+    top5 = AverageMeter("Acc@5", ":6.2f", Summary.AVERAGE)
+    progress = ProgressMeter(
+        len(val_loader) + (len(val_loader.sampler) * args.world_size < len(val_loader.dataset)),
+        [batch_time, losses, top1, top5],
+        prefix="Test: ",
+    )
+
+    # switch to evaluate mode
+    model.eval()
+
+    run_validate(val_loader)
+    if dist.is_initialized():
+        top1.all_reduce()
+        top5.all_reduce()
+
+    if len(val_loader.sampler) * args.world_size < len(val_loader.dataset):
+        aux_val_dataset = Subset(
+            val_loader.dataset,
+            range(len(val_loader.sampler) * args.world_size, len(val_loader.dataset)),
+        )
+        aux_val_loader = torch.utils.data.DataLoader(
+            aux_val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.workers,
+            pin_memory=True,
+        )
+        run_validate(aux_val_loader, len(val_loader))
+
+    progress.display_summary()
+
+    if dist.is_initialized():
+        top1.all_reduce()
+        top5.all_reduce()
+
+    if args.rank == 0:
+        mlflow.log_metrics(
+            metrics={"val loss": losses.avg, "val top1": top1.avg.item(),
+                     "val top5": top5.avg.item()},
+            step=epoch,  # logging right at the end of the
+            # last epoch
+        )
+
+    return top1.avg
+
+
+def validate(val_loader, trainer: dlrt.DLRTTrainer, args, epoch, train_len):
     console.rule("validation")
     def run_validate(loader, base_progress=0):
         rank = 0 if not dist.is_initialized() else dist.get_rank()
@@ -537,7 +725,8 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, args):
         mlflow.log_metrics(
             metrics={"val loss": losses.avg, "val top1": top1.avg.item(),
                      "val top5": top5.avg.item()},
-            step=trainer.counter,
+            step=epoch,  # logging right at the end of the
+            # last epoch
         )
 
     return top1.avg
@@ -659,8 +848,10 @@ if __name__ == "__main__":
     mlflow.set_tracking_uri("file:/hkfs/work/workspace/scratch/qv2382-dlrt/mlflow/")
     experiment = mlflow.set_experiment(args.arch)
     # run_id -> adaptive needs to be unique, roll random int?
-    run_name = f"wrapall-adapt-{args.adaptive}-{random.randint(1000000000, 9999999999)}"
+    run_name = f"4gpu-batchhalf-" \
+               f"-{os.environ['SLURM_JOBID']}"
     with mlflow.start_run():
+        mlflow.log_param("Slurm jobid", os.environ['SLURM_JOBID'])
         mlflow.set_tag("mlflow.runName", run_name)
         print("run_name:", run_name)
         print('tracking uri:', mlflow.get_tracking_uri())

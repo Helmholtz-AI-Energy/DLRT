@@ -10,7 +10,7 @@ from rich import print
 from rich.columns import Columns
 from rich.console import Console
 from rich.pretty import Pretty
-console = Console(width=120)
+console = Console(width=140)
 
 from .basic import DLRTModule
 
@@ -184,84 +184,25 @@ class DLRTLinearFixed(DLRTModule):
         console.print(columns)
 
     def get_classic_weight_repr(self):
+        if self.s.ndim == 1:
+            return self.k @ torch.diag(self.s) @ self.lt
         return self.k @ self.s @ self.lt
 
-    # @torch.no_grad()
-    # def set_aux_vars(self):
-    #     factory = {"device": self.k.device, "dtype": self.k.dtype}
-    #     # u, vt, n, m, unp1, vtprev
-    #
-    #     self.u = nn.Parameter(torch.linalg.qr(self.k)[0].to(**factory), requires_grad=False)
-    #     # overwrite the old vars once there are new ones
-    #     nn.init.kaiming_uniform_(self.unp1, a=math.sqrt(5))
-    #     # aux_N -> aux_Unp1.T @ aux_U
-    #     #   used in setting s,
-    #     self.n = nn.Parameter(self.u.T @ self.unp1, requires_grad=False)
-    #     # aux_Vtnp1 -> q from qr(lt.T)
-    #     self.vt = nn.Parameter(torch.linalg.qr(self.lt.T)[0], requires_grad=False)
-    #     nn.init.kaiming_uniform_(self.vtnp1, a=math.sqrt(5))
-    #     # aux_M -> aux_Vtnp1 @ aux_Vt.T
-    #     self.m = nn.Parameter(self.vt @ self.vtnp1.T, requires_grad=False)
-    #
-    #     self.u.requires_grad = False
-    #     self.vt.requires_grad = False
-    #     self.n.requires_grad = False
-    #     self.m.requires_grad = False
-    #     self.unp1.requires_grad = False
-    #     self.vtnp1.requires_grad = False
-
-    # def reset_parameters(self) -> None:
-    #     # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
-    #     # uniform(-1/sqrt(in_features), 1/sqrt(in_features)). For details, see
-    #     # https://github.com/pytorch/pytorch/issues/57109
-    #     if self.init_method == "random":
-    #         nn.init.kaiming_uniform_(self.k, a=math.sqrt(5))
-    #         nn.init.kaiming_uniform_(self.s, a=math.sqrt(5))
-    #         nn.init.kaiming_uniform_(self.lt, a=math.sqrt(5))
-    #         if self.bias is not None:
-    #             w = self.k @ self.s @ self.lt  # should it be lt.T??
-    #             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(w)
-    #             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-    #             nn.init.uniform_(self.bias, -bound, bound)
-    #     else:  # svd init case
-    #         weights = torch.empty(
-    #             (self.in_features, self.out_features),
-    #             device=self.k.device,
-    #             dtype=self.k.dtype,
-    #         )
-    #         nn.init.kaiming_uniform_(weights, a=math.sqrt(5))
-    #         k, vec_s, ltt = torch.linalg.svd(weights)
-    #         self.k *= 0
-    #         self.k += k[:, : self.low_rank].clone().detach()
-    #         self.s *= 0
-    #         self.s += torch.diag(vec_s[: self.low_rank].clone().detach())
-    #         self.lt *= 0
-    #         # TODO: transpose needed??
-    #         self.lt += ltt.T[:, : self.low_rank].clone().detach()
-    #         if self.bias is not None:
-    #             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(weights)
-    #             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-    #             nn.init.uniform_(self.bias, -bound, bound)
-    #     # self.set_aux_vars()
-
+    @torch.no_grad()
     def reset_parameters(self):
-        nn.init.kaiming_normal_(self.u)
-        nn.init.kaiming_normal_(self.s)
-        # nn.init.normal_(self.s)
-        # self.s.set_(torch.sort(self.s, descending=True).values)
-        nn.init.kaiming_normal_(self.vt)
+        nn.init.kaiming_uniform_(self.u, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.s, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.vt, a=math.sqrt(5))
 
-        nn.init.kaiming_normal_(self.unp1)
-        nn.init.kaiming_normal_(self.vtnp1)
-        nn.init.kaiming_normal_(self.k)
-        nn.init.kaiming_normal_(self.lt)
-        nn.init.kaiming_normal_(self.n)
-        nn.init.kaiming_normal_(self.m)
+        nn.init.kaiming_uniform_(self.unp1, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.vtnp1, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.k, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.lt, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.n, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.m, a=math.sqrt(5))
 
         if self.bias is not None:
-            w = torch.linalg.multi_dot(
-                [self.k, self.s, self.lt],
-            )  # should it be lt.T??
+            w = torch.linalg.multi_dot([self.k, self.s, self.lt])
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(w)
             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
             nn.init.uniform_(self.bias, -bound, bound)
@@ -298,13 +239,15 @@ class DLRTLinearFixed(DLRTModule):
         # k -> aux_U @ s
         # self.k = nn.Parameter(self.u @ self.s, requires_grad=True)
         self.k.set_(self.u @ self.s)
+        # TODO: !! sorting s at the top of the training loop might fuck everything up
+        # self.s.set_(torch.sort(self.s, descending=True).values)
+
         self.k.requires_grad = True
 
     @torch.no_grad()
     def l_preprocess(self):
         self._change_params_requires_grad(False)
         # lt -> s @ aux_Vt
-        # self.lt = nn.Parameter(self.s @ self.vt, requires_grad=True)
         self.lt.set_(self.s @ self.vt)
         self.lt.requires_grad = True
 
@@ -314,22 +257,17 @@ class DLRTLinearFixed(DLRTModule):
         self._change_params_requires_grad(False)
         # aux_Unp1 -> q from qr(k)
         #   aux_Unp1 used in s-step forward, can keep in u
-        # self.u = nn.Parameter(torch.linalg.qr(self.k)[0], requires_grad=False)
         self.unp1.set_(torch.linalg.qr(self.k)[0])
         # aux_N -> aux_Unp1.T @ aux_U
         #   used in setting s,
-        # self.n = nn.Parameter(self.u.T @ self.unp1, requires_grad=False)
         self.n.set_(self.unp1.T @ self.u)
 
     @torch.no_grad()
     def l_postprocess(self):
         self._change_params_requires_grad(False)
         # aux_Vtnp1 -> q from qr(lt.T)
-        # self.vt = nn.Parameter(torch.linalg.qr(self.lt.T)[0], requires_grad=False)
         self.vtnp1.set_(torch.linalg.qr(self.lt.T)[0].T)
         # aux_M -> aux_Vtnp1 @ aux_Vt.T
-        # self.m = nn.Parameter(self.vt @ self.vtnp1.T, requires_grad=False)
-        # self.m.set_(self.vt @ self.vtnp1.T)
         self.m.set_(self.vtnp1 @ self.vt.T)
 
     @torch.no_grad()
@@ -471,16 +409,16 @@ class DLRTLinearAdaptive(DLRTModule):
         # Setting a=sqrt(5) in kaiming_uniform is the same as initializing with
         # uniform(-1/sqrt(in_features), 1/sqrt(in_features)). For details, see
         # https://github.com/pytorch/pytorch/issues/57109
-        nn.init.kaiming_normal_(self.k)
-        nn.init.kaiming_normal_(self.s)
-        nn.init.kaiming_normal_(self.lt)
+        nn.init.kaiming_uniform_(self.u, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.s, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.vt, a=math.sqrt(5))
 
-        nn.init.kaiming_normal_(self.u)
-        nn.init.kaiming_normal_(self.unp1)
-        nn.init.kaiming_normal_(self.m)
-        nn.init.kaiming_normal_(self.vtnp1)
-        nn.init.kaiming_normal_(self.n)
-        nn.init.kaiming_normal_(self.m)
+        nn.init.kaiming_uniform_(self.unp1, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.vtnp1, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.k, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.lt, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.n, a=math.sqrt(5))
+        nn.init.kaiming_uniform_(self.m, a=math.sqrt(5))
         if self.bias is not None:
             w = torch.linalg.multi_dot([self.k, self.s[:self.rmax, :self.rmax], self.lt])
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(w)
@@ -541,7 +479,7 @@ class DLRTLinearAdaptive(DLRTModule):
         # k -> aux_U @ s
         s = self.s[: self.low_rank, : self.low_rank]
 
-        self.k[:, self.low_rank:] = 0.
+        # self.k.zero_()
         self.k[:, : self.low_rank] = self.u[:, : self.low_rank] @ s
         self.k.requires_grad = True
         self.k.training = True
@@ -550,8 +488,7 @@ class DLRTLinearAdaptive(DLRTModule):
     def l_preprocess(self):
         self._change_params_requires_grad(False)
         s = self.s[: self.low_rank, : self.low_rank]
-        # self.lt[: self.low_rank] = kls @ self.vt[: self.low_rank]
-        self.lt[self.low_rank:] = 0.
+        # self.lt.zero_()
         self.lt[:self.low_rank] = s @ self.vt[: self.low_rank]
         self.lt.requires_grad = True
         self.lt.training = True
@@ -566,10 +503,10 @@ class DLRTLinearAdaptive(DLRTModule):
         k_extended = torch.cat((self.k[:, :lr], self.u[:, :lr]), dim=1)
         prev_u, _ = torch.linalg.qr(k_extended)
         # aux_N -> aux_Unp1.T @ aux_U
-        self.unp1[:, lr2:] = 0.
+        # self.unp1.zero_()
         self.unp1[:, :lr2] = prev_u
         #   used in setting s,
-        self.n.zero_()
+        # self.n.zero_()
         self.n[: lr2, :lr] = self.unp1[:, :lr2].T @ self.u[:, :lr]
 
     @torch.no_grad()
@@ -578,7 +515,7 @@ class DLRTLinearAdaptive(DLRTModule):
         lr2 = 2 * self.low_rank
         l_extended = torch.cat((self.lt[:lr].T, self.vt[:lr].T), dim=1)
         aux_Vnp1, _ = torch.linalg.qr(l_extended)
-        self.vtnp1.zero_()
+        # self.vtnp1.zero_()
         self.vtnp1[:lr2] = aux_Vnp1.T
         self.m.zero_()
         self.m[:lr2, :lr] = self.vtnp1[:lr2] @ self.vt[:lr].T
@@ -589,7 +526,7 @@ class DLRTLinearAdaptive(DLRTModule):
         lr = self.low_rank
         lr2 = 2 * self.low_rank
         self.s[:lr2, :lr2] = self.n[:lr2, :lr] @ self.s[:lr, :lr] @ self.m[:lr2, :lr].T
-        # self.s[lr2:, lr2:] = 0.
+        # self.s.zero_()  # todo: ??
         self.s.requires_grad = True
         self.s.training = True
         self.bias.requires_grad = True
@@ -597,8 +534,6 @@ class DLRTLinearAdaptive(DLRTModule):
 
     @torch.no_grad()
     def rank_adaption(self, skip=False):
-        if skip:
-            return
         # 1) compute SVD of S
         # d=singular values, u2 = left singuar vecs, v2= right singular vecs
         # TODO: 64 bit?
@@ -613,23 +548,26 @@ class DLRTLinearAdaptive(DLRTModule):
         u2 = u2.to(self.s.dtype, non_blocking=True)
         # d, u2, v2 = tf.linalg.svd(s_small)
 
-        # absolute value treshold (try also relative one)
-        tol = self.eps_adapt * torch.linalg.norm(sing)
-        new_lr = sing.shape[0] // 2
-        max_lr = 2 * new_lr - 1
-        for j in range(2, max_lr):
-            tmp = torch.linalg.norm(sing[j : 2 * new_lr - 1])
-            if tmp < tol:
-                new_lr = j
-                break
+        if not skip:
+            # absolute value treshold (try also relative one)
+            tol = self.eps_adapt * torch.linalg.norm(sing)
+            new_lr = sing.shape[0] // 2
+            max_lr = 2 * new_lr - 1
+            for j in range(2, max_lr):
+                tmp = torch.linalg.norm(sing[j : 2 * new_lr - 1])
+                if tmp < tol:
+                    new_lr = j
+                    break
+        else:
+            new_lr = self.low_rank
 
         # rmax = max(min(rmax, self.rmax), 2)  # -> handled by the 2 in the for loop above
         # new_sz = int(new_lr * 2)
         # update s
         # self.s.zero_()
         self.s[:new_lr, :new_lr] = torch.diag(sing[:new_lr]).to(device=self.s.device, dtype=self.s.dtype)
-        self.u.zero_()
+        # self.u.zero_()
         self.u[:, :new_lr] = self.unp1[:, : 2 * self.low_rank] @ u2[:, :new_lr]
-        self.vt.zero_()
+        # self.vt.zero_()
         self.vt[:new_lr] = v2[:new_lr, :] @ self.vtnp1[: 2 * self.low_rank, :]
         self.low_rank = int(new_lr)

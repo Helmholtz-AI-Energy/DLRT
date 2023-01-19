@@ -14,7 +14,7 @@ from rich.pretty import Pretty
 from .conv import DLRTConv2d
 from .linear import DLRTLinear
 
-console = Console(width=120)
+console = Console(width=140)
 
 __all__ = ["DLRTNetwork"]
 
@@ -73,13 +73,13 @@ class DLRTNetwork(nn.Module):
         if init_ddp:
             # need a seperate DDP instance for each training case, only way to have diff buckets
             self.set_layer_case("k")
-            self.run_preproces(case="k")
+            # self.run_preproces(case="k")
             self.kmodel = torch.nn.parallel.DistributedDataParallel(self.model)
             self.set_layer_case("l")
-            self.run_preproces(case="l")
+            # self.run_preproces(case="l")
             self.lmodel = torch.nn.parallel.DistributedDataParallel(self.model)
             self.set_layer_case("s")
-            self.run_preproces(case="s")
+            # self.run_preproces(case="s")
             self.smodel = torch.nn.parallel.DistributedDataParallel(
                 self.model,
                 find_unused_parameters=True,
@@ -154,7 +154,7 @@ class DLRTNetwork(nn.Module):
     def _set_training_all_params(self, network, totrain):
         for n, m in network.named_parameters():
             m.requires_grad = totrain
-            m.training = totrain
+            # m.training = totrain
             try:
                 m.track_running_stats = totrain
             except AttributeError:
@@ -164,25 +164,27 @@ class DLRTNetwork(nn.Module):
         # set the training case of all DLRT layers (conv/linear)
         models = [self.model]
         # self.optimizer.zero_grad(set_to_none=True)
+        self.model.train()
         if case in ["k", "l"]:
             # turn off training on all layers
-            self._set_training_all_params(network=self.model, totrain=False)
-            self.model.eval()
+            # self.model.eval()
+            # self._set_training_all_params(network=self.model, totrain=False)
             try:
-                self._set_training_all_params(network=self.kmodel, totrain=False)
-                self._set_training_all_params(network=self.lmodel, totrain=False)
                 models.append(getattr(self, f"{case}model"))
-                self.kmodel.eval()
-                self.lmodel.eval()
+                # self.kmodel.eval()
+                self.kmodel.train()
+                # self.lmodel.eval()
+                self.lmodel.train()
+                # self._set_training_all_params(network=self.kmodel, totrain=False)
+                # self._set_training_all_params(network=self.lmodel, totrain=False)
             except AttributeError:
                 pass
         else:  # s case -> train all layers, turn off training of K and L
-            self.model.train()
-            self._set_training_all_params(network=self.model, totrain=True)
+            # self.model.train()
+            # self._set_training_all_params(network=self.model, totrain=True)
             try:
                 self.smodel.train()
-                self._set_training_all_params(network=self.smodel, totrain=True)
-                # self.smodel.train()
+                # self._set_training_all_params(network=self.smodel, totrain=True)
                 models.append(self.smodel)
             except AttributeError:
                 pass
