@@ -34,6 +34,20 @@ class DLRTModule(nn.Module):
         # to be overwritten (if needed in the not-fixed case)
         ...
 
+    def stop_pretraining(self):
+        # stop pretraining and convert layers to DLRT layers
+        # - shows bad performance in initial tests
+        ...
+
+    def all_reduce(self, method: str = "average"):
+        # reduce the parameters across the parameter space (i.e. average them across the processes)
+        #   only does something if working in parallel
+        ...
+
+    def set_dlrt_requires_grad(self, requires):
+        # sets the dlrt params to either require grads or not.
+        ...
+
     def get_rank_percentage(self):
         """
         Get the percentage of ranks being used compared to the number of weights in a dense layer
@@ -42,8 +56,8 @@ class DLRTModule(nn.Module):
 
     def change_training_case(self, case):
         # switch -> if current train case is k/l, do post for
-        if case not in ["k", "l", "s"]:
-            raise ValueError(f"case must be one of k, l, or s, not: {case}")
+        if case not in ["k", "l", "s", "pretrain"]:
+            raise ValueError(f"case must be one of k, l, s, or pretrain, not: {case}")
         self.train_case = case
         self.training = True
 

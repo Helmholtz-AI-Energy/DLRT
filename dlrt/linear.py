@@ -28,6 +28,7 @@ def DLRTLinear(
     device=None,
     dtype=None,
     eps_adapt: float = 0.01,
+    pretrain: bool = False,
 ):
     """
     Gets a linear layer with the given features
@@ -58,6 +59,7 @@ def DLRTLinear(
             eps_adapt=eps_adapt,
             device=device,
             dtype=dtype,
+            pretrain=pretrain,
         )
 
 
@@ -260,6 +262,7 @@ class DLRTLinearFixed(DLRTModule):
     def l_preprocess(self):
         self._change_params_requires_grad(False)
         # lt -> s @ aux_Vt
+        # NOTE transposed from paper!
         self.lt.set_(self.s @ self.vt)
         self.lt.requires_grad = True
 
@@ -313,11 +316,14 @@ class DLRTLinearAdaptive(DLRTModule):
         # rmax: int = None,
         bias: bool = True,
         eps_adapt: float = 0.1,
-        init_method: str = "random",
         device=None,
         dtype=None,
+        pretrain: bool = True,
     ) -> None:
         """
+        TODO: this
+        TODO: this layer has some elements which are transposed from the paper, need to mark and
+            double check
 
         Parameters
         ----------
@@ -360,7 +366,6 @@ class DLRTLinearAdaptive(DLRTModule):
             self.rmax = min([in_features, out_features]) // 2
             self.low_rank = int(self.rmax * low_rank_percent)
             self.rmax = int(self.low_rank * 2)  # TODO: cleanup?
-            print(self.rmax, self.low_rank)
 
         self.basic_number_weights = out_features * in_features
 
@@ -371,8 +376,13 @@ class DLRTLinearAdaptive(DLRTModule):
         # self.low_rank = low_rank if low_rank is not None else min([in_features, out_features])
 
         self.dlrt = True
-        self.init_method = init_method
-        assert init_method in ["random", "svd"], "init_method must be in ['random', 'svd']"
+
+        self.pretrain = pretrain
+        if pretrain:
+            self.fullweight = nn.Parameter(
+                torch.empty(out_features, in_features),
+                requires_grad=True,
+            )
 
         # need k, lt, s, bias
         # K -> U @ S, L -> V @ S.T
@@ -455,35 +465,40 @@ class DLRTLinearAdaptive(DLRTModule):
 
     # @torch.jit.script
     def forward(self, input: Tensor) -> Tensor:
-        # eps = torch.finfo(input.dtype).eps
-        if self.train_case == "k":  # k-step
+        eps = torch.finfo(input.dtype).eps
+        if self.train_case == "pretrain":
+            ret = input @ self.fullweight.T
+        elif self.train_case == "k":  # k-step
             # remove elements close to 0
-            # second = self.k[:, : self.low_rank] @ self.vt[: self.low_rank]
-            # second[(second >= eps) & (second <= -eps)] *= 0
-            # ret = input @ second
-            ret = torch.linalg.multi_dot(
-                [input, self.k[:, : self.low_rank], self.vt[: self.low_rank]],
-            )
+            second = self.k[:, : self.low_rank] @ self.vt[: self.low_rank]
+            second[(second >= eps) & (second <= -eps)] *= 0
+            ret = input @ second
+            # ret = torch.linalg.multi_dot(
+            #     [input, self.k[:, : self.low_rank], self.vt[: self.low_rank]],
+            # )
         elif self.train_case == "l":  # l-step
-            # second = self.u[:, : self.low_rank] @ self.lt[: self.low_rank]
-            # second[(second >= eps) & (second <= -eps)] *= 0
-            # ret = input @ second
-            ret = torch.linalg.multi_dot(
-                [input, self.u[:, : self.low_rank], self.lt[: self.low_rank]],
-            )
+            second = self.u[:, : self.low_rank] @ self.lt[: self.low_rank]
+            second[(second >= eps) & (second <= -eps)] *= 0
+            ret = input @ second
+            # ret = torch.linalg.multi_dot(
+            #     [input, self.u[:, : self.low_rank], self.lt[: self.low_rank]],
+            # )
         else:  # s-step
             # TODO: should this be only low_rank??? (not x2)
             lr2 = 2 * self.low_rank
-            # second = torch.linalg.multi_dot(
-            #    [self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
-            # )
-            # second[(second >= eps) & (second <= -eps)] *= 0
-            # ret = input @ second
-            ret = torch.linalg.multi_dot(
-                [input, self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
+            second = torch.linalg.multi_dot(
+               [self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
             )
+            second[(second >= eps) & (second <= -eps)] *= 0
+            ret = input @ second
+            # ret = torch.linalg.multi_dot(
+            #     [input, self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
+            # )
 
-        return ret if self.bias is None else ret + self.bias
+        if self.bias is not None:
+            ret.add_(self.bias)
+
+        return ret
 
     @torch.no_grad()
     def k_preprocess(self):
@@ -583,3 +598,51 @@ class DLRTLinearAdaptive(DLRTModule):
         # self.vt.zero_()
         self.vt[:new_lr] = v2[:new_lr, :] @ self.vtnp1[: 2 * self.low_rank, :]
         self.low_rank = int(new_lr)
+
+    @torch.no_grad()
+    def stop_pretraining(self):
+        # TODO: need to sync up the ranks in DDP!!
+        self.pretrain = False
+
+        # factory = {"dtype": weight.dtype, "device": weight.device}
+        # self.to(**factory)
+        # fullweight: out x in -> .T : in x out
+        u, sing, vh = torch.linalg.svd(
+            self.fullweight.T,
+            full_matrices=True,  # FIXME?
+            # driver="gesvdj",
+        )
+        # u : in x in
+        # sing: min(out x in)
+        # vh: out x out
+        # print(u.shape, sing.shape, vh.shape, self.v.shape)
+        # u = u.to(**factory, non_blocking=True)
+        # sing = sing.to(**factory, non_blocking=True)
+        # v = vh.T
+
+        new_lr = min(sing.shape[0], self.s.shape[0])
+
+        # new
+        nn.init.eye_(self.s)
+        self.s[:new_lr, :new_lr] = torch.diag(sing[:new_lr]).to(
+            device=self.s.device,
+            dtype=self.s.dtype,
+        )
+
+        # u: in x rank
+        # vt: rank x out
+        self.u[:, :] = u[:, :self.u.shape[1]]
+        self.unp1[:, :] = u[:, :self.unp1.shape[1]]
+        # print(self.vt.shape, vh.shape)
+        self.vt[:] = vh[:self.vt.shape[0]]
+        self.vtnp1[:] = vh[:self.vtnp1.shape[0]]
+
+        # self.u[:, :new_lr] = self.u_hat[:, : 2 * self.low_rank] @ u[:, :new_lr]
+        # self.v[:, :new_lr] = self.v_hat[:, : 2 * self.low_rank] @ vh[:, :new_lr]
+        # print(self.fullweight.shape, self.u.shape, self.v.shape, new_lr, self.low_rank,
+        #     self.v_hat.shape)
+        # self.u[:, :new_lr] = self.u_hat[:, : 2 * self.low_rank] @ u[:, :new_lr]
+        # self.v[:, :new_lr] = self.v_hat[:, : 2 * self.low_rank] @ vh.T[:, :new_lr]
+
+        del self.fullweight
+        # self.low_rank = int(new_lr)

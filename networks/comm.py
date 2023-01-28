@@ -328,6 +328,7 @@ def init(method, batchnorm_group_size=1, batchnorm_group_stride=1):
         # port = "29500"
         # os.environ["MASTER_ADDR"] = address
         # os.environ["MASTER_PORT"] = port
+        print(f"device count: {torch.cuda.device_count()}")
         torch.cuda.set_device(comm_rank % 4)
         time.sleep(0.1 * comm_rank)
 

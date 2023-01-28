@@ -2,32 +2,27 @@
 
 # Slurm job configuration
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-### #SBATCH --gpus-per-task=1
+#SBATCH --ntasks-per-node=4
+#SBATCH --gres=gpu:4
 #SBATCH --time=02:00:00
 #SBATCH --job-name=dlrt-ddp
 #SBATCH --partition=accelerated
 #SBATCH --account=haicore-project-scc
-#SBATCH --gres=gpu:1
 #SBATCH --output="/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/logs/slurm-%j"
+#SBATCH --exclude=hkn[0818]
 
 ml purge
 
 # pmi2 cray_shasta
 SRUN_PARAMS=(
   --mpi="pmi2"
-  #--ntasks-per-node=1
+#  --ntasks-per-node=4
   --gpus-per-task=1
   --cpus-per-task="19"
   #--cpu-bind="ldoms"
   --gpu-bind="closest"
   --label
 )
-
-export MLFLOW_SERVER_ADDRESS=$MLFLOW_SERVER_ADDRESS
-echo $MLFLOW_SERVER_ADDRESS
-export MLFLOW_SERVER_PORT=$MLFLOW_SERVER_PORT
-echo $MLFLOW_SERVER_PORT
 
 #export CUDA_AVAILABLE_DEVICES="0,1,2,3"
 # /hkfs/work/workspace/scratch/qv2382-dpnn-scratch/dpnn-scratch
@@ -46,19 +41,20 @@ export NCCL_COLLNET_ENABLE=0
 #export DATA_PREFIX="/hkfs/home/dataset/datasets/imagenet-2012/original/imagenet-raw/ILSVRC/Data/CLS-LOC/"
 #export TRAIN_FILE="/hkfs/work/workspace/scratch/qv2382-dpnn_scratch/dpnn-scratch/hdfml_train_cifar.sh"
 
-if [ "$DATASET" == "imagenet" ]; then
-	export DATA_PREFIX="/hkfs/home/dataset/datasets/imagenet-2012/original/imagenet-raw/ILSVRC/Data/CLS-LOC/"
-elif [ "$DATASET" == "cifar10" ]; then
-	export DATA_PREFIX="/hkfs/home/dataset/datasets/CIFAR10/"
-elif [ "$DATASET" == "cifar100" ]; then
-	export DATA_PREFIX="/hkfs/home/dataset/datasets/CIFAR100/"
-else
-	echo "Defaulting to CIFAR10 training"
-	export DATASET="cifar10"
-	export DATA_PREFIX="/hkfs/home/dataset/datasets/CIFAR10/"
-	#export DATA_PREFIX="/hkfs/home/dataset/datasets/imagenet-2012/original/imagenet-raw/ILSVRC/Data/CLS-LOC/"
-fi
-
+#if [ "$DATASET" == "imagenet" ]; then
+#	export DATA_PREFIX="/hkfs/home/dataset/datasets/imagenet-2012/original/imagenet-raw/ILSVRC/Data/CLS-LOC/"
+#elif [ "$DATASET" == "cifar10" ]; then
+#	export DATA_PREFIX="/hkfs/home/dataset/datasets/CIFAR10/"
+#elif [ "$DATASET" == "cifar100" ]; then
+#	export DATA_PREFIX="/hkfs/home/dataset/datasets/CIFAR100/"
+#else
+#	echo "Defaulting to CIFAR10 training"
+#	export DATASET="cifar10"
+#	export DATA_PREFIX="/hkfs/home/dataset/datasets/CIFAR10/"
+#	#export DATA_PREFIX="/hkfs/home/dataset/datasets/imagenet-2012/original/imagenet-raw/ILSVRC/Data/CLS-LOC/"
+#fi
+export CONFIGS="${SCRIPT_DIR}DLRT/configs/"
+export DATA_PREFIX=$(sed '4q;d' ../configs/resnet18.yaml | cut -d '"' -f2)
 
 #export NN_ARCH="resnet18"
 
@@ -72,6 +68,8 @@ echo "config: ${CONFIG}"
 #    bash -c python resnet.py --data=${DATA_PREFIX} --world-size=${SLURM_NTASKS}"
 srun "${SRUN_PARAMS[@]}" singularity exec --nv \
   --bind "${DATA_PREFIX}","${SCRIPT_DIR}","/scratch","/tmp","/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/dlrt/":"/opt/conda/lib/python3.8/site-packages/dlrt/" "${SINGULARITY_FILE}" \
-    bash -c "python -u resnet.py --data=${DATA_PREFIX} -b 512 -p 10 --lr 0.1 --momentum 0.1 -a resnet18 --adaptive 1"
+    bash -c "TORCH_DISTRIBUTED_DEBUG=DETAIL python -u baseline-resnet.py --config ${CONFIGS}resnet18.yaml"
+
+#    --data=${DATA_PREFIX} -b 512 -p 10 --lr 0.1 --momentum 0.1 -a resnet18 --adaptive 1"
 
 #toynet"

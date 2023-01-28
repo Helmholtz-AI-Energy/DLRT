@@ -6,6 +6,7 @@ from collections import namedtuple
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+
 from rich import print
 from rich.columns import Columns
 from rich.console import Console
@@ -28,8 +29,10 @@ class DLRTNetwork(nn.Module):
         rank_percent: float = None,
         adaptive: bool = True,
         epsilon: float = None,
-        init_ddp: bool = dist.is_initialized(),
+        ddp_dlrt_layers: bool = False,
+        dense_first_layer: bool = False,
         dense_last_layer: bool = False,
+        pretrain_count: int = 0
     ):
         super().__init__()
         self.adaptive = adaptive
@@ -52,109 +55,151 @@ class DLRTNetwork(nn.Module):
         self.epsilon = epsilon
 
         # replace linear layers
-        self.model = torch_model
+        self.torch_model = torch_model
         self.reset_layers = None
-        self.rank = 0 if not dist.is_initialized() else dist.get_rank()
+        if not dist.is_initialized():
+            self.ddp_dlrt_layers = False
+            self.rank = 0
+        else:
+            self.ddp_dlrt_layers = ddp_dlrt_layers
+            self.rank = dist.get_rank()
 
-        # todo: test me! -> keeping first dense layer
+
+        self.pretrain_count = pretrain_count
+        self.in_pretrain = lambda: self.pretrain_count > 0
+        self.dense_last_layer = dense_last_layer
+        self.dense_first_layer = dense_first_layer
+        self._dfl_wait = dense_first_layer
+
+        self.current_layer_train_case = "pretrain" if self.in_pretrain() else "k"
+        self.wrap_model()
+
+    @torch.no_grad()
+    def wrap_model(self):
         self.first_layer = None
-        self.model = self._replace_layers(self.model)
+        self.dlrt_model = self._replace_layers(
+            self.torch_model,
+            pretrain=self.in_pretrain()
+        )
+        if self.dense_last_layer:
+            self.dlrt_model = self._reset_last_layer_to_dense(self.dlrt_model)
 
-        # self.run_preprocess("k")
-        # self.run_preprocess("l")
-        # self.run_postprocess("k")
-        # self.run_postprocess("l")
-        # self.run_preprocess("s")
-        # if adaptive:
-        #    self.run_rank_adaption()
+        self.__run_command_on_dlrt_layers(
+            module=self.dlrt_model, command="set_dlrt_requires_grad", kwargs={"requires": False}
+        )
 
-        if dense_last_layer:
-            self.model = self._reset_last_layer_to_dense(self.model)
-        if init_ddp:
+        if dist.is_initialized():
             # need a seperate DDP instance for each training case, only way to have diff buckets
+            # self.pretrainmodel = torch.nn.parallel.DistributedDataParallel(
+            #     self.dlrt_model,
+            #     find_unused_parameters=False,
+            # )
+
             self.set_layer_case("k")
-            # self.run_preproces(case="k")
-            self.kmodel = torch.nn.parallel.DistributedDataParallel(self.model)
-            self.set_layer_case("l")
-            # self.run_preproces(case="l")
-            self.lmodel = torch.nn.parallel.DistributedDataParallel(self.model)
-            self.set_layer_case("s")
-            # self.run_preproces(case="s")
-            self.smodel = torch.nn.parallel.DistributedDataParallel(
-                self.model,
+            self.run_preprocess(case="k")
+            self.kmodel = torch.nn.parallel.DistributedDataParallel(
+                self.dlrt_model,
                 find_unused_parameters=True,
             )
+            self.lmodel = self.kmodel
+            self.smodel = self.kmodel
+            self.pretrainmodel = self.kmodel
+            # self.set_layer_case("l")
+            # self.run_preprocess(case="l")
+            # # self.lmodel = torch.nn.parallel.DistributedDataParallel(
+            # #     self.dlrt_model,
+            # #     find_unused_parameters=False,
+            # # )
+            # self.set_layer_case("s")
+            # self.run_preprocess(case="s")
+            # self.smodel = torch.nn.parallel.DistributedDataParallel(
+            #     self.dlrt_model,
+            #     find_unused_parameters=False,
+            # )
+            for layer in self.dlrt_model.children():
+                if hasattr(layer, 'reset_parameters'):
+                    layer.reset_parameters()
         else:
             # pass
-            self.kmodel = self.model
-            self.lmodel = self.model
-            self.smodel = self.model
+            self.pretrainmodel = self.dlrt_model
+            self.kmodel = self.dlrt_model
+            self.lmodel = self.dlrt_model
+            self.smodel = self.dlrt_model
 
-    def _replace_layers(self, module, name=None, process_group=None):
+    def _replace_layers(self, module, pretrain=False, name=None, process_group=None):
         module_output = module
         # this will remove all the BatchNorm layers from the network
         # TODO: add warning that the replaced layers are slower than CUDnn (but that is expected)
-        # if isinstance(module, (nn.Linear, nn.Conv2d)) and self.first_layer is None:
-        #     self.first_layer = 1
-        if isinstance(module, nn.Linear):  # TODO: linear
-            module_output = DLRTLinear(
-                in_features=module.in_features,
-                out_features=module.out_features,
-                bias=module.bias is not None,
-                adaptive=self.adaptive,
-                low_rank_percent=self.rank_percent,
-                eps_adapt=self.epsilon["linear"],
-                # TODO: device checks??
-            ).to(device=module.weight.device, dtype=module.weight.dtype)
-            self.reset_layers = [module, name]
-        elif isinstance(module, nn.Conv2d):  # TODO 2
-            module_output = DLRTConv2d(
-                adaptive=self.adaptive,
-                low_rank_percent=self.rank_percent,
-                in_channels=module.in_channels,
-                out_channels=module.out_channels,
-                kernel_size=module.kernel_size,
-                stride=module.stride,
-                padding=module.padding,
-                dilation=module.dilation,
-                groups=module.groups,
-                bias=module.bias is not None,
-                padding_mode=module.padding_mode,
-                eps_adapt=self.epsilon["conv2d"],
-            ).to(device=module.weight.device, dtype=module.weight.dtype)
-            self.reset_layers = [module, name]
-            # print(f"replacing {name} old: {module} with {module_output}")
-            # del module
-            # module = module_output
-        # elif isinstance(module, nn.BatchNorm2d):
-        #     module_output = nn.Identity().to(device=module.weight.device, dtype=module.weight.dtype)
+        if isinstance(module, nn.Linear):
+            if not self._dfl_wait:  # if not waiting i.e. already past the first layer
+                module_output = DLRTLinear(
+                    in_features=module.in_features,
+                    out_features=module.out_features,
+                    bias=module.bias is not None,
+                    adaptive=self.adaptive,
+                    low_rank_percent=self.rank_percent,
+                    eps_adapt=self.epsilon["linear"],
+                    pretrain=pretrain,
+                ).to(device=module.weight.device, dtype=module.weight.dtype)
+                self.reset_layers = [module, name]
+            else:  # dont wait -> is first layer -> should be dense
+                self._dfl_wait = False
+        elif isinstance(module, nn.Conv2d):
+            if not self._dfl_wait:  # if not waiting i.e. already past the first layer
+                module_output = DLRTConv2d(
+                    adaptive=self.adaptive,
+                    low_rank_percent=self.rank_percent,
+                    in_channels=module.in_channels,
+                    out_channels=module.out_channels,
+                    kernel_size=module.kernel_size,
+                    stride=module.stride,
+                    padding=module.padding,
+                    dilation=module.dilation,
+                    groups=module.groups,
+                    bias=module.bias is not None,
+                    padding_mode=module.padding_mode,
+                    eps_adapt=self.epsilon["conv2d"],
+                    pretrain=pretrain,
+                ).to(device=module.weight.device, dtype=module.weight.dtype)
+                self.reset_layers = [module, name]
+                # del module
+            else:  # dont wait -> is first layer -> should be dense
+                self._dfl_wait = False
 
         for name, child in module.named_children():
-            # print(name, child.extra_repr())
-            module_output.add_module(name, self._replace_layers(child, name, process_group))
+            module_output.add_module(
+                name, self._replace_layers(
+                    child, pretrain=pretrain, name=name, process_group=process_group
+                )
+            )
         del module
         return module_output
 
     def _reset_last_layer_to_dense(self, module, name=None):
+        # if dist.get_rank() == 0:
+        #     print("replace", name)
         module_output = module
-        # this will remove all the BatchNorm layers from the network
         if name == self.reset_layers[1]:
             if hasattr(module, "weight"):
                 device = module.weight.device
                 dtype = module.weight.dtype
             else:
-                device = module.k.device
-                dtype = module.k.dtype
-            module_output = self.reset_layers[0].to(device=device, dtype=dtype)
+                try:
+                    device = module.k.device
+                    dtype = module.k.dtype
+                except AttributeError:
+                    device = None
+            if device is not None:
+                module_output = self.reset_layers[0].to(device=device, dtype=dtype)
         for name, child in module.named_children():
             module_output.add_module(name, self._reset_last_layer_to_dense(child, name))
-        del module
+        # del module
         return module_output
 
     def _set_training_all_params(self, network, totrain):
         for n, m in network.named_parameters():
             m.requires_grad = totrain
-            # m.training = totrain
+            m.training = True  # totrain
             try:
                 m.track_running_stats = totrain
             except AttributeError:
@@ -162,29 +207,30 @@ class DLRTNetwork(nn.Module):
 
     def set_layer_case(self, case):
         # set the training case of all DLRT layers (conv/linear)
-        models = [self.model]
+        models = [self.dlrt_model, ]
         # self.optimizer.zero_grad(set_to_none=True)
-        self.model.train()
-        if case in ["k", "l"]:
-            # turn off training on all layers
-            # self.model.eval()
-            # self._set_training_all_params(network=self.model, totrain=False)
+        # self.dlrt_model.train()
+        if case == "k":
             try:
-                models.append(getattr(self, f"{case}model"))
-                # self.kmodel.eval()
-                self.kmodel.train()
-                # self.lmodel.eval()
-                self.lmodel.train()
-                # self._set_training_all_params(network=self.kmodel, totrain=False)
+                models.append(getattr(self, f"kmodel"))
+                # self._set_training_all_params(network=self.kmodel, totrain=True)
+            except AttributeError:
+                pass
+        if case == "l":
+            # turn off training on all layers
+            # self.dlrt_model.eval()
+            # self._set_training_all_params(network=self.dlrt_model, totrain=False)
+            try:
+                models.append(getattr(self, f"kmodel"))
                 # self._set_training_all_params(network=self.lmodel, totrain=False)
             except AttributeError:
                 pass
         else:  # s case -> train all layers, turn off training of K and L
-            # self.model.train()
-            # self._set_training_all_params(network=self.model, totrain=True)
+            # self.dlrt_model.train()
+            # self._set_training_all_params(network=self.dlrt_model, totrain=True)
             try:
-                self.smodel.train()
-                # self._set_training_all_params(network=self.smodel, totrain=True)
+                # self.smodel.train()
+                # self._set_training_all_params(network=self.smodel, totrain=False)
                 models.append(self.smodel)
             except AttributeError:
                 pass
@@ -199,26 +245,34 @@ class DLRTNetwork(nn.Module):
 
     def run_preprocess(self, case):
         # prev: getattr(self, f"{case}model")
-        self.__run_command_on_dlrt_layers(module=self.model, command=f"{case}_preprocess")
+        self.__run_command_on_dlrt_layers(module=self.dlrt_model, command=f"{case}_preprocess")
 
     def run_postprocess(self, case):
-        self.__run_command_on_dlrt_layers(module=self.model, command=f"{case}_postprocess")
+        self.__run_command_on_dlrt_layers(module=self.dlrt_model, command=f"{case}_postprocess")
 
-    def run_rank_adaption(self, skip=False):
-        self.__run_command_on_dlrt_layers(module=self.model, command="rank_adaption", kwargs={"skip": skip})
+    def run_rank_adaption(self, skip=False, all_reduce_method="average"):
+        self.__run_command_on_dlrt_layers(
+            module=self.dlrt_model, command="rank_adaption", kwargs={"skip": skip}
+        )
+        # self.__run_command_on_dlrt_layers(
+        #     module=self.dlrt_model, command="all_reduce", kwargs={"method": all_reduce_method}
+        # )
+
+    def stop_pretraining(self):
+        self.__run_command_on_dlrt_layers(module=self.dlrt_model, command="stop_pretraining")
 
     def train(self, mode: bool = True):
         if not isinstance(mode, bool):
             raise ValueError("training mode is expected to be boolean")
-        # self.model.training = mode
-        self.model.training = mode
-        # self._train(self.model, mode)
-        for module in self.model.children():
+        # self.dlrt_model.training = mode
+        self.dlrt_model.training = mode
+        # self._train(self.dlrt_model, mode)
+        for module in self.dlrt_model.children():
             # print(module)
             module.train(mode)
         # todo: recursse deeper...?
         # TODO: fix me in DDP?? (do this on k/l/s models?)
-        # self.model = self.model.train()
+        # self.dlrt_model = self.dlrt_model.train()
         return self
 
     def _train(self, module, mode=True):
@@ -258,11 +312,15 @@ class DLRTNetwork(nn.Module):
 
     def get_all_ranks(self):
         self.ranks = []
-        self.__collect_ranks(self.model)
+        self.__collect_ranks(self.dlrt_model)
         out_ranks = self.ranks.copy()
         self.ranks = []
         return out_ranks
 
     def __call__(self, inputs, case):
-        # return self.model(inputs)
-        return getattr(self, f"{case}model")(inputs)
+        # if pretrain:
+        #     return self.premodel(inputs)
+        # if case != self.current_layer_train_case:
+        #     self.set_layer_case(case=case)
+        with getattr(self, f"{case}model").no_sync():
+            return getattr(self, f"{case}model")(inputs)

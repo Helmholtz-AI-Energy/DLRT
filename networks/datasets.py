@@ -202,10 +202,10 @@ def cifar10_val_dataset_n_loader(base_dir, batch_size, workers=6):
         transform=transforms.Compose([transforms.ToTensor(), cifar10_normalize]),
     )
 
-    if dist.is_initialized():
-        sampler = datadist.DistributedSampler(test_dataset)
-    else:
-        sampler = None
+    # if dist.is_initialized():
+    #     sampler = datadist.DistributedSampler(test_dataset)
+    # else:
+    sampler = None
 
     test_loader = torch.utils.data.DataLoader(
         dataset=test_dataset,

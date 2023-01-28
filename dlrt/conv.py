@@ -14,9 +14,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.nn import common_types
+import torch.distributed as dist
 
 from .basic import DLRTModule
 
+from rich.columns import Columns
+from rich.console import Console
+from rich.pretty import Pretty
+
+console = Console(width=140)
 
 __all__ = ["DLRTConv2d", "DLRTConv2dAdaptive", "DLRTConv2dFixed"]
 
@@ -36,6 +42,9 @@ def DLRTConv2d(
     device=None,
     low_rank_percent=None,
     eps_adapt: float = 0.01,
+    convert_from_weights: Tensor = None,
+    existing_bias: Tensor = None,
+    pretrain: bool = True,
 ):
     if adaptive:
         return DLRTConv2dAdaptive(
@@ -52,6 +61,9 @@ def DLRTConv2d(
             device,
             low_rank_percent,
             eps_adapt,
+            # convert_from_weights=convert_from_weights,
+            # existing_bias=existing_bias,
+            pretrain=pretrain
         )
     else:
         return DLRTConv2dFixed(
@@ -67,6 +79,9 @@ def DLRTConv2d(
             dtype,
             device,
             low_rank_percent,
+            convert_from_weights=convert_from_weights,
+            existing_bias=existing_bias,
+            # pretrain=pretrain,  TODO
         )
 
 
@@ -123,6 +138,7 @@ class _ConvNd(DLRTModule):
     # ==== low_rank =================================================
     low_rank: int
     rmax: int
+    convert_from_weights: Tensor
 
     def __init__(
         self,
@@ -142,6 +158,9 @@ class _ConvNd(DLRTModule):
         # ====================== DLRT params =========================================
         low_rank_percent: float | None = None,
         fixed_rank: bool = False,
+        convert_from_weights: torch.Tensor = None,
+        # existing_bias: Tensor = None,
+        pretrain: bool = True,
     ) -> None:
         # from torch =================================================================
         factory_kwargs = {"device": device, "dtype": dtype}
@@ -254,6 +273,8 @@ class _ConvNd(DLRTModule):
         #         )
         #     )
 
+        # if existing_bias is not None:
+        #     self.bias = existing_bias.clone()
         if bias:
             self.bias = nn.Parameter(torch.empty(out_channels, **factory_kwargs))
         else:
@@ -304,6 +325,8 @@ class DLRTConv2dFixed(_ConvNd):
         dtype=None,
         device=None,
         low_rank_percent=None,
+        convert_from_weights: torch.Tensor = None,
+        existing_bias: Tensor = None,
     ) -> None:
         """
         Initializer for the convolutional low rank layer (filterwise), extention of the classical Pytorch's convolutional layer.
@@ -389,6 +412,7 @@ class DLRTConv2dFixed(_ConvNd):
             torch.empty((self.low_rank, self.low_rank), **factory_kwargs),
             requires_grad=False,
         )
+        # todo: convert from full rank
         self.reset_parameters()
 
     @torch.no_grad()
@@ -425,7 +449,19 @@ class DLRTConv2dFixed(_ConvNd):
 
         """
 
-        batch_size = input.shape[0]
+        # batch_size = input.shape[0]
+        batch_size, shp1, shp2, shp3 = tuple(input.shape)
+        pad0, dil0, kern0 = self.padding[0], self.dilation[0], self.kernel_size[0]
+        pad1, dil1, kern1 = self.padding[1], self.dilation[1], self.kernel_size[1]
+        stride0 = self.stride[0]
+        stride1 = self.stride[1]
+        out_h = int((shp2 + 2 * pad0 - dil0 * (kern0 - 1) - 1) // stride0) + 1
+        out_w = int((shp3 + 2 * pad1 - dil1 * (kern1 - 1) - 1) // stride1) + 1
+
+        # out_h = int(np.floor(((input.shape[2] + 2 * self.padding[0] - self.dilation[0] * (
+        #                 self.kernel_size[0] - 1) - 1) / self.stride[0]) + 1))
+        # out_w = int(np.floor(((input.shape[3] + 2 * self.padding[1] - self.dilation[1] * (
+        #                   self.kernel_size[1] - 1) - 1) / self.stride[1]) + 1))
 
         inp_unf = (
             F.unfold(
@@ -437,21 +473,6 @@ class DLRTConv2dFixed(_ConvNd):
             .to(input.device)
             .transpose(1, 2)
         )
-
-        # out_h = int(np.floor(((input.shape[2] + 2 * self.padding[0] - self.dilation[0] * (
-        #                 self.kernel_size[0] - 1) - 1) / self.stride[0]) + 1))
-        # out_w = int(np.floor(((input.shape[3] + 2 * self.padding[1] - self.dilation[1] * (
-        #                   self.kernel_size[1] - 1) - 1) / self.stride[1]) + 1))
-
-        out_h = (
-            (input.shape[2] + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1)
-            // self.stride[0]
-        ) + 1
-        out_w = (
-            (input.shape[3] + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1)
-            // self.stride[1]
-        ) + 1
-
         if self.train_case == "k":
             # print(inp_unf.shape, self.v.shape, self.k.T.shape)
             out_unf = inp_unf @ self.v @ self.k.T
@@ -536,6 +557,7 @@ class DLRTConv2dAdaptive(_ConvNd):
         device=None,
         low_rank_percent=None,
         eps_adapt: float = 0.01,
+        pretrain: bool = True,
     ) -> None:
         """
         Initializer for the convolutional low rank layer (filterwise), extention of the classical Pytorch's convolutional layer.
@@ -571,16 +593,19 @@ class DLRTConv2dAdaptive(_ConvNd):
             # ====================== DLRT params =========================================
             low_rank_percent=low_rank_percent,
             fixed_rank=False,
+            pretrain=pretrain,
         )
         self.train_case = "k"
         self.eps_adapt = eps_adapt
-        if self.bias is not None:
-            self.bias = torch.nn.Parameter(
-                torch.zeros(self.out_channels, requires_grad=False, **factory_kwargs),
-                requires_grad=False,
-            )
 
         in_kern = self.in_channels * self.kernel_size_number
+        self.in_kern = in_kern
+        self.pretrain = pretrain
+        if pretrain:
+            self.fullweight = nn.Parameter(
+                torch.empty(out_channels, in_kern),
+                requires_grad=True,
+            )
         # ONLY create the parameters, reset_parameters fills them
         self.s_hat = nn.Parameter(
             torch.empty(
@@ -588,7 +613,7 @@ class DLRTConv2dAdaptive(_ConvNd):
                 self.rmax,
                 **factory_kwargs,
             ),
-            requires_grad=True,
+            requires_grad=False,
         )
         self.u = nn.Parameter(
             torch.empty(self.out_channels, self.rmax, **factory_kwargs),
@@ -608,11 +633,11 @@ class DLRTConv2dAdaptive(_ConvNd):
         )
         self.k = nn.Parameter(
             torch.empty(self.out_channels, self.rmax, **factory_kwargs),
-            requires_grad=True,
+            requires_grad=False,
         )
         self.l = torch.nn.Parameter(  # noqa: E741
             torch.empty(in_kern, self.rmax, **factory_kwargs),
-            requires_grad=True,
+            requires_grad=False,
         )
         self.n_hat = torch.nn.Parameter(
             torch.empty(2 * self.rmax, self.rmax, **factory_kwargs),
@@ -622,12 +647,21 @@ class DLRTConv2dAdaptive(_ConvNd):
             torch.empty(2 * self.rmax, self.rmax, **factory_kwargs),
             requires_grad=False,
         )
-
         self.reset_parameters()
+
+        # self.existing_bias = existing_bias is not None
+        # if convert_from_weights is not None:
+        #     self.convert_from_full_rank(
+        #         weight=convert_from_weights,
+        #         starting_rank=None, #low_rank_percent,  # self.low_rank,
+        #     )
 
     @torch.no_grad()
     def reset_parameters(self) -> None:
         # # below is with normal initialization?
+        if self.pretrain:
+            nn.init.kaiming_uniform_(self.fullweight, a=math.sqrt(5))
+
         nn.init.kaiming_uniform_(self.u, a=math.sqrt(5))
         nn.init.kaiming_uniform_(self.s_hat, a=math.sqrt(5))
         nn.init.kaiming_uniform_(self.v, a=math.sqrt(5))
@@ -640,7 +674,7 @@ class DLRTConv2dAdaptive(_ConvNd):
         nn.init.kaiming_uniform_(self.m_hat, a=math.sqrt(5))
 
         # for testing
-        if self.bias is not None:
+        if self.bias is not None:  # and not self.existing_bias:
             weight = torch.empty(
                 (self.out_channels, self.in_channels // self.groups, *self.kernel_size),
                 device=self.k.device,
@@ -662,7 +696,18 @@ class DLRTConv2dAdaptive(_ConvNd):
         phases for the steps 'K','L' and 'S' in order to be optimizable using dlrt.
 
         """
-        batch_size = input.shape[0]
+        # batch_size = input.shape[0]
+        batch_size, shp1, shp2, shp3 = tuple(input.shape)
+        pad0, dil0, kern0 = self.padding[0], self.dilation[0], self.kernel_size[0]
+        pad1, dil1, kern1 = self.padding[1], self.dilation[1], self.kernel_size[1]
+        stride0 = self.stride[0]
+        stride1 = self.stride[1]
+        out_h = int((shp2 + 2 * pad0 - dil0 * (kern0 - 1) - 1) // stride0) + 1
+        out_w = int((shp3 + 2 * pad1 - dil1 * (kern1 - 1) - 1) // stride1) + 1
+        # out_h = int(np.floor(((input.shape[2] + 2 * self.padding[0] - self.dilation[0] * (
+        #                 self.kernel_size[0] - 1) - 1) / self.stride[0]) + 1))
+        # out_w = int(np.floor(((input.shape[3] + 2 * self.padding[1] - self.dilation[1] * (
+        #                   self.kernel_size[1] - 1) - 1) / self.stride[1]) + 1))
 
         inp_unf = (
             F.unfold(
@@ -674,54 +719,34 @@ class DLRTConv2dAdaptive(_ConvNd):
             .to(input.device)
             .transpose(1, 2)
         )
-
-        # out_h = int(np.floor(((input.shape[2] + 2 * self.padding[0] - self.dilation[0] * (
-        #                 self.kernel_size[0] - 1) - 1) / self.stride[0]) + 1))
-        # out_w = int(np.floor(((input.shape[3] + 2 * self.padding[1] - self.dilation[1] * (
-        #                   self.kernel_size[1] - 1) - 1) / self.stride[1]) + 1))
-
-        out_h = (
-            int(
-                (input.shape[2] + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1)
-                // self.stride[0],
-            )
-            + 1
-        )
-        out_w = (
-            int(
-                (input.shape[3] + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1)
-                / self.stride[1],
-            )
-            + 1
-        )
-
-        # eps = torch.finfo(inp_unf.dtype).eps
-        if self.train_case == "k" or not self.training:
+        eps = torch.finfo(inp_unf.dtype).eps
+        if self.train_case == "pretrain":
+            out_unf = inp_unf @ self.fullweight.T
+        elif self.train_case == "k" or not self.training:
             # TODO: fastest method: (inp_unf @ v) @ k.T
             k, v = self.k[:, : self.low_rank].T, self.v[:, : self.low_rank]
-            # second = v @ k.T
+            # second = v @ k
             # second[(second <= eps) & (second >= -eps)] *= 0
-            # out_unf = inp_unf @ second  # @ v @ k.T
+            # out_unf = inp_unf @ second  # @ v @ k
             # Transposed k in line above
             out_unf = (inp_unf @ v) @ k
         elif self.train_case == "l" and self.training:
             l, ut = self.l[:, : self.low_rank], self.u[:, : self.low_rank].T
-            out_unf = (inp_unf @ l) @ ut
-            # second = self.l[:, : self.low_rank] @ self.u[:, : self.low_rank].T
+            # second = l @ ut
             # second[(second <= eps) & (second >= -eps)] *= 0
             # out_unf = inp_unf @ second
+            out_unf = (inp_unf @ l) @ ut
         elif self.train_case == "s" or not self.training:
             # TODO: is this set to 2*lr to enable the ability to grow lr?
             u_hat = self.u_hat[:, : 2 * self.low_rank]
             s_hat = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank]
             v_hat = self.v_hat[:, : 2 * self.low_rank]
-            # second = v_hat @ s_hat.T @ u_hat.T
             # fastest method uses multi_dot A x (B X (C x D))
             second = torch.linalg.multi_dot([v_hat, s_hat.T, u_hat.T])
             # second[(second <= eps) & (second >= -eps)] *= 0
             out_unf = inp_unf @ second
         else:
-            raise ValueError(f"Invalid step value: {self.step}")
+            raise ValueError(f"Pretraining? {self.pretrain}...Invalid step value: {self.train_case}")
 
         if self.bias is not None:
             out_unf.add_(self.bias)
@@ -730,16 +755,19 @@ class DLRTConv2dAdaptive(_ConvNd):
         out_unf.transpose_(1, 2)
         return out_unf.view(batch_size, self.out_channels, out_h, out_w)
 
-    def _change_params_requires_grad(self, requires_grad):
-        self.k.requires_grad = requires_grad
-        self.s_hat.requires_grad = requires_grad
-        self.l.requires_grad = requires_grad
+    def set_dlrt_requires_grad(self, requires):
+        self.k.requires_grad = requires
+        self.s_hat.requires_grad = requires
+        self.l.requires_grad = requires
         self.u.requires_grad = False  # requires_grad
         self.u_hat.requires_grad = False  # requires_grad
         self.v.requires_grad = False  # requires_grad
         self.v_hat.requires_grad = False  # requires_grad
         self.n_hat.requires_grad = False  # requires_grad
         self.m_hat.requires_grad = False  # requires_grad
+
+    def _change_params_requires_grad(self, requires_grad):
+        self.set_dlrt_requires_grad(requires_grad)
         self.bias.requires_grad = requires_grad
 
     @torch.no_grad()
@@ -807,7 +835,7 @@ class DLRTConv2dAdaptive(_ConvNd):
         # 1) compute SVD of S
         # d=singular values, u2 = left singuar vecs, v2= right singular vecs
         # TODO: 64 bit?
-        s_small = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank].clone().detach()
+        s_small = self.s_hat[: 2 * self.low_rank, : 2 * self.low_rank]  # .clone().detach()
         try:
             u2, sing, vh2 = torch.linalg.svd(
                 s_small,
@@ -822,6 +850,7 @@ class DLRTConv2dAdaptive(_ConvNd):
 
         # absolute value treshold (try also relative one)
         # TODO: different threshold methods
+
         if not skip:
             tol = self.eps_adapt * torch.linalg.norm(sing)
             new_lr = sing.shape[0] // 2
@@ -836,21 +865,154 @@ class DLRTConv2dAdaptive(_ConvNd):
         # new_lr = max(min(new_lr, self.rmax), 2)  # -> handled by the 2 in the for loop above
         # update s
 
-        # new
+        # new lr should only be a minimum of 2! (but it shouldn't really ever get here....)
         new_lr = max([min([new_lr, self.low_rank]), 2])
         if new_lr > 2 * self.low_rank:
-            self.u.set_(self.u_hat.data)
-            self.v.set_(self.v_hat.data)
-            return
+            print("new lr > 2*old lr!!")
+            # self.u.set_(self.u_hat.data)
+            # self.v.set_(self.v_hat.data)
+            # return
             # todo: raise??
+        # self.s_hat.set_(
+        #     torch.eye(*self.s_hat.shape, device=self.s_hat.device, dtype=self.s_hat.dtype)
+        # )
         # self.s_hat.zero_()
+        # self.u.zero_()
+        # self.v.zero_()
+
+        # lst = []
+        # u, s, v = None, None, None
+        # for n, p in dlrt_trainer.dlrt_model.named_parameters():
+        #     # if n.endswith("s_hat") or n.endswith("u") or n.endswith("v"):
+        #     #     try:
+        #     #         lst.append(f'{n}: {p.mean():.4f} {p.min():.4f} {p.max():.4f} {p.std():.4f}')
+        #     #     except:
+        #     #         pass
+        #     if n == "torch_model.conv1.s_hat":
+        #         s = p
+        #     elif n == "torch_model.conv1.u":
+        #         u = p
+        #     elif n == "torch_model.conv1.v":
+        #         v = p
+        # fwr = u @ s @ v.T  # full weight representation
+        # time.sleep(config['rank'] * 2)
+        # # cols = Columns(lst, equal=True, expand=True)
+        # # rprint(fwr.shape)
+        # mxsz = max(tuple(fwr.shape))
+        # loc_fwrep = torch.eye(mxsz).to(device=fwr.device)
+        # loc_fwrep[:fwr.shape[0], :fwr.shape[1]] = fwr
+        # w0 = torch.zeros_like(loc_fwrep)
+        # if dist.get_rank() == 0:
+        #     w0 = loc_fwrep
+        # dist.broadcast(w0, src=0)
+
         self.s_hat[:new_lr, :new_lr] = torch.diag(sing[:new_lr]).to(
             device=self.s_hat.device,
             dtype=self.s_hat.dtype,
         )
-        # self.u.zero_()
-        # self.v.zero_()
         self.u[:, :new_lr] = self.u_hat[:, : 2 * self.low_rank] @ u2[:, :new_lr]
-        self.v[:, :new_lr] = self.v_hat[:, : 2 * self.low_rank] @ (v2[:, :new_lr])
+        self.v[:, :new_lr] = self.v_hat[:, : 2 * self.low_rank] @ v2[:, :new_lr]
 
         self.low_rank = int(new_lr)
+
+    @torch.no_grad()
+    def all_reduce(self, method: str = "average"):
+        if not dist.is_initialized():
+            # early out if not working distributed
+            return
+        #   (full weight and bias are changed 'as expected' for a nn
+        # this has no effect if in pretraining
+
+        # TODO: groups?
+        sz = float(dist.get_world_size())
+        if method == "average":
+            # if dist.get_rank() == 0:
+            # console.rule("u")
+            # s = ""
+            # for d in torch.diag(self.u)[:10].tolist():
+            #     s += f" {d:.3f}"
+            # console.print(s)
+            # print(self.u)
+            # raise ValueError
+
+            self.u.true_divide_(sz)
+            self.s_hat.true_divide_(sz)
+            self.v.true_divide_(sz)
+            self.u_hat.true_divide_(sz)
+            self.v_hat.true_divide_(sz)
+            self.k.true_divide_(sz)
+            self.l.true_divide_(sz)
+            self.n_hat.true_divide_(sz)
+            self.m_hat.true_divide_(sz)
+            dist.all_reduce(self.u, op=dist.ReduceOp.SUM, async_op=True)
+            dist.all_reduce(self.s_hat, op=dist.ReduceOp.SUM, async_op=True)
+            dist.all_reduce(self.v, op=dist.ReduceOp.SUM, async_op=True)
+            dist.all_reduce(self.u_hat, op=dist.ReduceOp.SUM, async_op=True)
+            dist.all_reduce(self.v_hat, op=dist.ReduceOp.SUM, async_op=True)
+            dist.all_reduce(self.k, op=dist.ReduceOp.SUM, async_op=True)
+            dist.all_reduce(self.l, op=dist.ReduceOp.SUM, async_op=True)
+            dist.all_reduce(self.n_hat, op=dist.ReduceOp.SUM, async_op=True)
+            dist.all_reduce(self.m_hat, op=dist.ReduceOp.SUM, async_op=True)
+            # if dist.get_rank() == 0:
+            #     console.print(torch.diag(self.s_hat)[:10].tolist())
+        elif method == "projection":
+            # TODO: transpose V?
+            # 1. get full weight representation
+            fwr = self.u @ self.s_hat @ self.v.T  # full weight representation
+            # 2. pad weight representation into 
+            mxsz = max(tuple(fwr.shape))
+            loc_fwrep = torch.eye(mxsz).to(device=fwr.device)
+            loc_fwrep[:fwr.shape[0], :fwr.shape[1]] = fwr
+            w0 = torch.zeros_like(loc_fwrep)
+            if dist.get_rank() == 0:
+                w0 = loc_fwrep
+            dist.broadcast(w0, src=0)
+        else:
+            raise ValueError(f"invalid all reduce method: {method}")
+
+    @torch.no_grad()
+    def stop_pretraining(self):
+        # TODO: need to sync up the ranks in DDP!!
+        self.pretrain = False
+
+        # factory = {"dtype": weight.dtype, "device": weight.device}
+        # self.to(**factory)
+        # fullweight: out x in_kern -> .T : in_kern x out
+        u, sing, vh = torch.linalg.svd(
+            self.fullweight.T,
+            full_matrices=True,  # FIXME?
+            # driver="gesvdj",
+        )
+        # u : in_kern x in_kern
+        # sing: min(out x in_kern)
+        # vh: out x out
+        # print(u.shape, sing.shape, vh.shape, self.v.shape)
+        # u = u.to(**factory, non_blocking=True)
+        # sing = sing.to(**factory, non_blocking=True)
+        # v = vh.T
+
+        new_lr = min(sing.shape[0], self.s_hat.shape[0])
+
+        # new
+        nn.init.eye_(self.s_hat)
+        self.s_hat[:new_lr, :new_lr] = torch.diag(sing[:new_lr]).to(
+            device=self.s_hat.device,
+            dtype=self.s_hat.dtype,
+        )
+
+        # u: output x rank
+        # v: in_kern x rank
+        self.u[:, :new_lr] = vh[:, :new_lr]
+        self.u_hat[:, :new_lr] = vh[:, :new_lr]
+        self.v[:, :new_lr] = u[:, :new_lr]
+        self.v_hat[:, :new_lr] = u[:, :new_lr]
+
+        # self.u[:, :new_lr] = self.u_hat[:, : 2 * self.low_rank] @ u[:, :new_lr]
+        # self.v[:, :new_lr] = self.v_hat[:, : 2 * self.low_rank] @ vh[:, :new_lr]
+        # print(self.fullweight.shape, self.u.shape, self.v.shape, new_lr, self.low_rank,
+        #     self.v_hat.shape)
+        # self.u[:, :new_lr] = self.u_hat[:, : 2 * self.low_rank] @ u[:, :new_lr]
+        # self.v[:, :new_lr] = self.v_hat[:, : 2 * self.low_rank] @ vh.T[:, :new_lr]
+
+        del self.fullweight
+        # self.low_rank = int(new_lr)
