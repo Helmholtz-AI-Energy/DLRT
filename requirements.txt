@@ -1,7 +1,9 @@
 # local package
-
+rich
+pytorch_warmup
 coverage
 numpy
 # external requirements
 Sphinx
 torch
+mlflow

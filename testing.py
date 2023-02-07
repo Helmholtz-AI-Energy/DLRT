@@ -75,79 +75,28 @@ class TransformerModel(nn.Module):
 
 
 def main():
-    transform = transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        ],
-    )
-
-    batch_size = 4
-
-    trainset = datasets.CIFAR10(
-        root="./data",
-        train=True,
-        download=True,
-        transform=transform,
-    )
-    trainloader = torch.utils.data.DataLoader(
-        trainset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=2,
-    )
-
-    # testset = datasets.CIFAR10(
-    #     root="./data",
-    #     train=False,
-    #     download=True,
-    #     transform=transform,
-    # )
-    # testloader = torch.utils.data.DataLoader(
-    #     testset,
-    #     batch_size=batch_size,
-    #     shuffle=False,
-    #     num_workers=2,
-    # )
-
-    # convert model to DLRTNet
-    model = models.resnet18()
-    criterion = nn.CrossEntropyLoss()
-    # optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-
-    # testing resnet18
-    print(model)
-    print([c for c in model.children()][-1])
-    # dlrt_model = DLRTTrainer(
-    #     torch_model=model,
-    #     optimizer_name="SGD",
-    #     optimizer_kwargs={"lr": 0.001, "momentum": 0.9},
-    #     adaptive=True,
-    #     criterion=criterion,
-    # )
-    # print(dlrt_model)
+    # inp = torch.randn(1, 3, 10, 12)
+    w = torch.randn(10, 3, 4, 5)
+    # inp_unf = torch.nn.functional.unfold(inp, (4, 5))
+    weight2 = w.view(w.size(0), -1)  # .T.transpose(1, 2)
+    # print(weight2.shape)
+    u, s, vh = torch.linalg.svd(weight2, full_matrices=False)
+    print(f"u: {u.shape} s: {s.shape} vh: {vh.shape}")
+    # print(f"")
+    # print(f"")
 
 
-    # for epoch in range(2):  # loop over the dataset multiple times
-    #
-    #     running_loss = 0.0
-    #     for i, data in enumerate(trainloader, 0):
-    #         # get the inputs; data is a list of [inputs, labels]
-    #         inputs, labels = data
-    #
-    #         # zero the parameter gradients
-    #         # optimizer.zero_grad()
-    #
-    #         # forward + backward + optimize
-    #         loss = dlrt_model.train_step(inputs, labels)
-    #
-    #         # print statistics
-    #         running_loss += loss.item()
-    #         if i % 2000 == 1999:  # print every 2000 mini-batches
-    #             print(f"[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}")
-    #             running_loss = 0.0
 
-    print("Finished Training")
+
+
+    # print(f"inp shape: {inp_unf.transpose(1, 2).shape} weight2 shape: {weight2.shape}")
+    # # out_unf = inp_unf.transpose(1, 2) @ weight2
+    # # # out = torch.nn.functional.fold(out_unf, (7, 8), (1, 1))
+    # # # or equivalently (and avoiding a copy),
+    # # out = out_unf.view(1, 2, 7, 8)
+    # layer = torch.nn.Conv2d(3, 3, kernel_size=(4, 5))
+    # print(layer.weight.shape)
+    # # print(torch.nn.functional.conv2d(inp, w) - out).abs().max()
 
 
 def test_transformer():

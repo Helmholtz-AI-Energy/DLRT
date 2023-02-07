@@ -9,7 +9,6 @@
 #SBATCH --partition=accelerated
 #SBATCH --account=haicore-project-scc
 #SBATCH --output="/hkfs/work/workspace/scratch/qv2382-dlrt/DLRT/logs/slurm-%j"
-#SBATCH --exclude=hkn[0818]
 
 ml purge
 
