@@ -328,7 +328,7 @@ def init(method, batchnorm_group_size=1, batchnorm_group_stride=1):
         # port = "29500"
         # os.environ["MASTER_ADDR"] = address
         # os.environ["MASTER_PORT"] = port
-        print(f"device count: {torch.cuda.device_count()}")
+        # print(f"device count: {torch.cuda.device_count()}")
         torch.cuda.set_device(comm_rank % 4)
         time.sleep(0.1 * comm_rank)
 
@@ -369,5 +369,5 @@ def init(method, batchnorm_group_size=1, batchnorm_group_stride=1):
     # get the local process group for batchnorm
     batchnorm_group = init_local_group(batchnorm_group_size, batchnorm_group_stride)
 
-    print("finished dist init")
+    print(f"finished dist init - rank: {dist.get_rank()} ws: {dist.get_world_size()}")
     return batchnorm_group

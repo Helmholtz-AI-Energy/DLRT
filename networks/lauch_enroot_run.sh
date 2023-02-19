@@ -11,7 +11,7 @@ while test $# -gt 0; do
       echo "-h, --help                show brief help"
       echo "-N, --nodes               number of nodes to compute on"
       echo "-G, --gpus                gpus per node to use, i.e. the gres value"
-#      echo "-c, --config              config file to use"
+      echo "-c, --config              config file to use"
       echo "--reservation             name of reservation"
       exit 0
       ;;
@@ -47,13 +47,13 @@ TOMOUNT+="/scratch,/tmp,/usr/bin/srun:/usr/bin/srun"
 TOMOUNT+="/hkfs/work/workspace/scratch/qv2382-dlrt/datasets"
 
 salloc --partition=accelerated \
-  -A hk-project-test-mlperf \
+  -A haicore-project-scc \
   -N "${SLURM_NNODES}" \
   --time "${TIMELIMIT}" \
   --gres gpu:"${GPUS_PER_NODE}" \
   --container-name=torch \
   --container-mounts="${TOMOUNT}" \
+  --container-mount-home \
   --container-writable
-#  --container-mount-home \
 
 

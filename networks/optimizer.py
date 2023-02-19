@@ -34,7 +34,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 console = Console(width=140)
 
 
-def get_lr_schedules(config, optim):
+def get_lr_schedules(config, optim, len_ds=None):
     """
     Get learning rate schedules from config files
 
@@ -49,8 +49,17 @@ def get_lr_schedules(config, optim):
     """
     sched_name = getattr(lr_schedules, config['lr_schedule']['name'])
     sched_params = config['lr_schedule']['params']
-    if config['lr_schedule'] == "ExponentialLR":
+    if config['lr_schedule']['name'] == "ExponentialLR":
         sched_params["last_epoch"] = config['epochs'] - config['start_epoch']
+    elif config['lr_schedule']['name'] == "CosineAnnealingLR":
+        # sched_params["last_epoch"] = config['epochs'] - config['start_epoch']
+        sched_params["T_max"] = len_ds
+    elif config['lr_schedule']['name'] == "CosineAnnealingWarmRestarts":
+        sched_params["T_0"] = len_ds
+    elif config['lr_schedule']['name'] == "CyclicLR":
+        sched_params["max_lr"] = config['learning_rate']
+        sched_params["step_size_up"] = len_ds
+
     scheduler = sched_name(optim, **sched_params)
     wup_sched_name = getattr(warmup, config['lr_warmup']['name'])
     wup_sched_params = config['lr_warmup']['params']

@@ -1,5 +1,11 @@
 import torch
 from pathlib import Path
+import numpy as np
+from pandas import DataFrame
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm, Normalize
+import seaborn as sns
 
 
 def compare_u(exp1, target_param, exp2=None):
@@ -133,21 +139,21 @@ def compare_qr(exp1, target_param, exp2=None):
         # print((cdist.argmin(dim=1) - torch.arange(cdist.shape[0], device=cdist.device)).sum())
 
         # # cos_ang = lastq @ currentq.T
-        # cos_ang = firstq @ currentq.T
-        # arange = torch.arange(cos_ang.shape[0], device=cos_ang.device)
-        # k = 1
-        # top_angles = torch.topk(cos_ang, k=k, largest=True)[1]
-        # top_angles5 = top_angles[:5]
-        # # print(top_angles5)
-        # in_top3 = torch.tensor(
-        #     [a in b for a, b in zip(top_angles, arange)],
-        #     dtype=torch.bool,
-        #     device=top_angles.device,
-        # )
-        # print(epoch, f"\tnumber in the top{k} angles:", in_top3.sum().item(),
-        #     f"\tnumber of elements:", top_angles.shape[0], "\t%:",
-        #     f"{((in_top3.sum() / top_angles.shape[0]) * 100).item():.4f}"
-        # )
+        cos_ang = firstq @ currentq.T
+        arange = torch.arange(cos_ang.shape[0], device=cos_ang.device)
+        k = 1
+        top_angles = torch.topk(cos_ang, k=k, largest=True)[1]
+        top_angles5 = top_angles[:5]
+        # print(top_angles5)
+        in_top3 = torch.tensor(
+            [a in b for a, b in zip(top_angles, arange)],
+            dtype=torch.bool,
+            device=top_angles.device,
+        )
+        print(epoch, f"\tnumber in the top{k} angles:", in_top3.sum().item(),
+            f"\tnumber of elements:", top_angles.shape[0], "\t%:",
+            f"{((in_top3.sum() / top_angles.shape[0]) * 100).item():.4f}"
+        )
         #
         lastq = currentq
         lastweights = currentweights
@@ -198,15 +204,65 @@ def print_stats(tens):
     )
 
 
-if __name__ == '__main__':
-    base_folder = Path(
-        "/hkfs/work/workspace/scratch/qv2382-dlrt/saved_models/4gpu-svd-tests/normal/resnet18/"
-    )
+def plot_qr_diffs(arch, datasets, base_dir, out_dir):
+    
+    # % matplotlib inline
+    # sns.set(rc={'figure.figsize':(8,6)})
 
-    modules = ["module.conv1.weight", "module.fc.weight",
-                 "module.layer1.1.conv2.weight", "module.layer3.1.conv2.weight",
-                 "module.layer4.0.downsample.0.weight", ]
+    # notebook to explore the q values
+    base_path = Path(base_dir) / arch / datasets
+    out_path = Path(out_dir) / arch / datasets
+    out_path.mkdir(parents=True, exist_ok=True)
+    # 4 files, need heatmaps from them
+    #
+    # first
+    for comp in ["first", "1previous", "previous", "2previous"]:
+        # need to do the heatmap for each one -> wq, wtq, wqt, wtqt
+        for subexp in ['wq', "wtq", "wqt", "wtqt"]:
+            title = f"{datasets}, {arch}, Comparing to {comp} epoch: Weight " \
+                    f"{'Transposed' if subexp[1] == 't' else 'normal'}, Q" \
+                    f"{'.T' if subexp[-1] == 't' else ''} "
+            try:
+                make_n_save_heatmap_from_df(
+                    file_name=base_path / f"{subexp}-{comp}.csv",
+                    out_loc=out_path / f"{subexp}-{comp}.png",
+                    title=title,
+                )
+            except FileNotFoundError:
+                print(f"no file for {comp}, {subexp}")
+            print(f"finished {arch}, {datasets}, {comp}, {subexp}")
+
+
+def make_n_save_heatmap_from_df(file_name, out_loc, title):
+    df = pd.read_csv(file_name)
+    try:
+        df = df.drop(columns=["Unnamed: 0"])
+    except:
+        pass
+    plt.figure(figsize=(16, 10))
+    sns.heatmap(df, annot=False, vmin=0.0, vmax=1.0).set(title=title)
+    plt.tight_layout()
+    plt.savefig(out_loc)
+    plt.close()
+
+
+if __name__ == '__main__':
+    # base_folder = Path(
+    #     "/hkfs/work/workspace/scratch/qv2382-dlrt/saved_models/4gpu-svd-tests/normal/resnet18/"
+    # )
+    files = Path("/home/daniel/horeka-mount/DLRT/networks/tempdata")
+    archs = ["resnet18", "vgg16", "ciresan4"]
+    datasets = ["mnist", "cifar10"]
+
+    out_dir = Path("/home/daniel/horeka-mount/DLRT/networks/tempanalyzed")
+    for a in archs:
+        for d in datasets:
+            plot_qr_diffs(arch=a, datasets=d, base_dir=files, out_dir=out_dir)
+
+    # modules = ["module.conv1.weight", "module.fc.weight",
+    #              "module.layer1.1.conv2.weight", "module.layer3.1.conv2.weight",
+    #              "module.layer4.0.downsample.0.weight", ]
 
     # compare_u(base_folder, target_param=modules[-5])
     # compare_s(base_folder, target_param=modules[-3])
-    compare_qr(base_folder, target_param=modules[0])
+    # compare_qr(base_folder, target_param=modules[0])
