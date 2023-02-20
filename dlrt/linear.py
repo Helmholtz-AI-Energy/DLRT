@@ -487,7 +487,7 @@ class DLRTLinearAdaptive(DLRTModule):
             # TODO: should this be only low_rank??? (not x2)
             lr2 = 2 * self.low_rank
             second = torch.linalg.multi_dot(
-               [self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
+                [self.unp1[:, :lr2], self.s[:lr2, :lr2], self.vtnp1[:lr2]],
             )
             second[(second >= eps) & (second <= -eps)] *= 0
             ret = input @ second
@@ -631,11 +631,11 @@ class DLRTLinearAdaptive(DLRTModule):
 
         # u: in x rank
         # vt: rank x out
-        self.u[:, :] = u[:, :self.u.shape[1]]
-        self.unp1[:, :] = u[:, :self.unp1.shape[1]]
+        self.u[:, :] = u[:, : self.u.shape[1]]
+        self.unp1[:, :] = u[:, : self.unp1.shape[1]]
         # print(self.vt.shape, vh.shape)
-        self.vt[:] = vh[:self.vt.shape[0]]
-        self.vtnp1[:] = vh[:self.vtnp1.shape[0]]
+        self.vt[:] = vh[: self.vt.shape[0]]
+        self.vtnp1[:] = vh[: self.vtnp1.shape[0]]
 
         # self.u[:, :new_lr] = self.u_hat[:, : 2 * self.low_rank] @ u[:, :new_lr]
         # self.v[:, :new_lr] = self.v_hat[:, : 2 * self.low_rank] @ vh[:, :new_lr]

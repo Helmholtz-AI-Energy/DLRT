@@ -9,8 +9,8 @@ import torch.utils.data
 import torch.utils.data.distributed as datadist
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
-
 from timm.data.transforms_factory import create_transform
+
 # from timm.data import
 
 imagenet_normalize = transforms.Normalize(
@@ -285,15 +285,15 @@ def cifar100_train_dataset_plus_loader(base_dir, batch_size, workers=6):
         std=(0.2023, 0.1994, 0.2010),
     )
 
-    transform = transforms.Compose(
-        [
-            transforms.Pad(4),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32),
-            transforms.ToTensor(),
-            cifar10_normalize,
-        ],
-    )
+    # transform = transforms.Compose(
+    #     [
+    #         transforms.Pad(4),
+    #         transforms.RandomHorizontalFlip(),
+    #         transforms.RandomCrop(32),
+    #         transforms.ToTensor(),
+    #         cifar10_normalize,
+    #     ],
+    # )
 
     train_dataset = datasets.CIFAR100(
         root=str(train_dir),
@@ -347,10 +347,12 @@ def cifar100_val_dataset_n_loader(base_dir, batch_size, workers=6):
 def mnist_train_data(base_dir, batch_size, workers=2, resize=False):
     if resize:
         transform = transforms.Compose(
-            [transforms.ToTensor(),
-             transforms.Resize(size=32),
-             transforms.Grayscale(3),
-             mnist_normalize]
+            [
+                transforms.ToTensor(),
+                transforms.Resize(size=32),
+                transforms.Grayscale(3),
+                mnist_normalize,
+            ],
         )
     else:
         transform = transforms.Compose([transforms.ToTensor(), mnist_normalize])
@@ -375,10 +377,12 @@ def mnist_train_data(base_dir, batch_size, workers=2, resize=False):
 def mnist_val_data(base_dir, batch_size, workers=2, resize=False):
     if resize:
         transform = transforms.Compose(
-            [transforms.ToTensor(),
-             transforms.Resize(size=32),
-             transforms.Grayscale(3),
-             mnist_normalize]
+            [
+                transforms.ToTensor(),
+                transforms.Resize(size=32),
+                transforms.Grayscale(3),
+                mnist_normalize,
+            ],
         )
     else:
         transform = transforms.Compose([transforms.ToTensor(), mnist_normalize])

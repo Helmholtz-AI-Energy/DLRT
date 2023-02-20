@@ -6,7 +6,15 @@ import random
 import shutil
 import time
 from enum import Enum
+from pathlib import Path
 
+import comm
+import datasets as dsets
+import mlflow.pytorch
+import mlflow_utils as mlfutils
+import optimizer as opt
+import pandas as pd
+import pytorch_warmup as warmup
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.nn as nn
@@ -15,38 +23,26 @@ import torch.optim
 import torch.optim.lr_scheduler as lr_schedules
 import torch.utils.data.distributed
 import torchvision.models as models
+import yaml
+from compare_basis import CompareQR
+from compare_basis import QRProjectWeights
+from mpi4py import MPI
 from PIL import ImageFile
-from torch.optim.lr_scheduler import ReduceLROnPlateau, ExponentialLR
+from projecting import ProjectWeightsHoldQ
+from projecting import ProjectWeightsQR
+from rich import print as rprint
+from rich.columns import Columns
+from rich.console import Console
+from torch.optim.lr_scheduler import ExponentialLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
 
-
-from pathlib import Path
 import dlrt
 
-import comm
-import datasets as dsets
-import optimizer as opt
-import mlflow_utils as mlfutils
-from compare_basis import CompareQR, QRProjectWeights
-
-from projecting import ProjectWeightsQR, ProjectWeightsHoldQ
-
-from rich import print as rprint
-from rich.columns import Columns
-
-from rich.console import Console
-
-import pandas as pd
 # import cProfile, pstats, io
 # from pstats import SortKey
 # pr = cProfile.Profile()
-
-import pytorch_warmup as warmup
-import yaml
-import mlflow
-import mlflow.pytorch
-from mpi4py import MPI
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 console = Console(width=140)
@@ -96,29 +92,29 @@ def main(config):  # noqa: C901
         random.seed(config["seed"])
         torch.manual_seed(config["seed"])
 
-    if config['rank'] == 0:
-        mlflow.log_params({"world_size": config['world_size'], "rank": config['rank']})
+    if config["rank"] == 0:
+        mlflow.log_params({"world_size": config["world_size"], "rank": config["rank"]})
 
     # create model
-    if config['arch'] == "toynet":
-        model = ToyNet()
-    elif config['pretrained']:
+    if config["arch"] == "ciresan4":
+        model = Ciresan4()
+    elif config["pretrained"]:
         print(f"=> using pre-trained model '{config['arch']}'")
-        model = models.__dict__[config['arch']](pretrained=True)
+        model = models.__dict__[config["arch"]](pretrained=True)
     else:
         print(f"=> creating model '{config['arch']}'")
-        model = models.__dict__[config['arch']]()
+        model = models.__dict__[config["arch"]]()
 
     # For multiprocessing distributed, DistributedDataParallel constructor
     # should always set the single device scope, otherwise,
     # DistributedDataParallel will use all available devices.
     if dist.is_initialized():
-        config['gpu'] = dist.get_rank() % torch.cuda.device_count()  # only 4 gpus/node
-        print(config['gpu'])
+        config["gpu"] = dist.get_rank() % torch.cuda.device_count()  # only 4 gpus/node
+        print(config["gpu"])
     else:
-        config['gpu'] = 0
-    torch.cuda.set_device(config['gpu'])
-    model.cuda(config['gpu'])
+        config["gpu"] = 0
+    torch.cuda.set_device(config["gpu"])
+    model.cuda(config["gpu"])
     device = torch.device(f"cuda:{config['gpu']}")
 
     if dist.is_initialized():
@@ -126,8 +122,9 @@ def main(config):  # noqa: C901
 
     criterion = nn.CrossEntropyLoss(label_smoothing=config["label_smoothing"]).to(device)
     optimizer = getattr(torch.optim, config["optimizer"]["name"])(
-        model.parameters(), config['learning_rate'],
-        **config["optimizer"]["params"]
+        model.parameters(),
+        config["learning_rate"],
+        **config["optimizer"]["params"],
     )
 
     # Data loading code
@@ -138,15 +135,21 @@ def main(config):  # noqa: C901
     # else:
     if config["dataset"] == "imagenet":
         dset_dict = dsets.get_imagenet_datasets(
-            config['data_location'], config['local_batch_size'], config['workers']
+            config["data_location"],
+            config["local_batch_size"],
+            config["workers"],
         )
     elif config["dataset"] == "cifar10":
         dset_dict = dsets.get_cifar10_datasets(
-            config['data_location'], config['local_batch_size'], config['workers']
+            config["data_location"],
+            config["local_batch_size"],
+            config["workers"],
         )
     elif config["dataset"] == "cifar100":
         dset_dict = dsets.get_cifar100_datasets(
-            config['data_location'], config['local_batch_size'], config['workers']
+            config["data_location"],
+            config["local_batch_size"],
+            config["workers"],
         )
     else:
         raise NotImplementedError(f"Dataset {config['dataset']} not implemented")
@@ -160,11 +163,14 @@ def main(config):  # noqa: C901
     # scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
     # warmup_scheduler = warmup.LinearWarmup(optimizer, warmup_period=warmup_period)
     # scheduler, warmup_scheduler = opt.get_lr_schedules(config=config, optim=dlrt_trainer.optimizer)
-    scheduler, warmup_scheduler = opt.get_lr_schedules(config=config, optim=optimizer,
-        len_ds=len(train_loader))
+    scheduler, warmup_scheduler = opt.get_lr_schedules(
+        config=config,
+        optim=optimizer,
+        len_ds=len(train_loader),
+    )
 
     # log parameters from config
-    if config['rank'] == 0:
+    if config["rank"] == 0:
         mlflow.log_params(config)
         for cat in ["dlrt", "lr_schedule", "lr_warmup", "optimizer"]:
             for k in config[cat]:
@@ -176,26 +182,27 @@ def main(config):  # noqa: C901
 
     # optionally resume from a checkpoint
     # TODO: add DLRT checkpointing
-    if config['resume']:
-        if os.path.isfile(config['resume']):
+    if config["resume"]:
+        if os.path.isfile(config["resume"]):
             print(f"=> loading checkpoint: {config['resume']}")
-            if config['gpu'] is None:
-                checkpoint = torch.load(config['resume'])
+            if config["gpu"] is None:
+                checkpoint = torch.load(config["resume"])
             elif torch.cuda.is_available():
                 # Map model to be loaded to specified single gpu.
                 loc = f"cuda:{config['gpu']}"
-                checkpoint = torch.load(config['resume'], map_location=loc)
-            config['start_epoch'] = checkpoint["epoch"]
+                checkpoint = torch.load(config["resume"], map_location=loc)
+            config["start_epoch"] = checkpoint["epoch"]
             best_acc1 = checkpoint["best_acc1"]
-            if config['gpu'] is not None:
+            if config["gpu"] is not None:
                 # best_acc1 may be from a checkpoint from a different GPU
-                best_acc1 = best_acc1.to(config['gpu'])
+                best_acc1 = best_acc1.to(config["gpu"])
             model.load_state_dict(checkpoint["state_dict"])
             # optimizer.load_state_dict(checkpoint["optimizer"])
             scheduler.load_state_dict(checkpoint["scheduler"])
             print(
                 "=> loaded checkpoint '{}' (epoch {})".format(
-                    config['resume'], checkpoint["epoch"]
+                    config["resume"],
+                    checkpoint["epoch"],
                 ),
             )
         else:
@@ -211,8 +218,8 @@ def main(config):  # noqa: C901
     # model.register_comm_hook(state=None, hook=project_bucket)
     projector = ProjectWeightsQR(network=model)
     # projector = ProjectWeightsHoldQ(network=model)
-    for epoch in range(config['start_epoch'], config['epochs']):
-        if config['rank'] == 0:
+    for epoch in range(config["start_epoch"], config["epochs"]):
+        if config["rank"] == 0:
             console.rule(f"Begin epoch {epoch} LR: {optimizer.param_groups[0]['lr']}")
             mlflow.log_metrics(
                 metrics={"lr": optimizer.param_groups[0]["lr"]},
@@ -224,8 +231,16 @@ def main(config):  # noqa: C901
         # if epoch < config["qr_warmup"] and dist.is_initialized():
         # with model.no_sync():
         train_loss = train(
-            train_loader, optimizer, ddpmodel, criterion, epoch, device, config,
-            warmup_scheduler=warmup_scheduler, projector=projector, lr_schedule=scheduler
+            train_loader,
+            optimizer,
+            ddpmodel,
+            criterion,
+            epoch,
+            device,
+            config,
+            warmup_scheduler=warmup_scheduler,
+            projector=projector,
+            lr_schedule=scheduler,
         )
         # else:
         # # with model.no_sync():
@@ -254,14 +269,17 @@ def main(config):  # noqa: C901
         _, val_loss = validate(val_loader, model, criterion, config, epoch)
 
         if rank == 0:
-            print(f"Average val loss across process space: {val_loss} "
-                  f"-> diff: {train_loss - val_loss}")
+            print(
+                f"Average val loss across process space: {val_loss} " f"-> diff: {train_loss - val_loss}",
+            )
 
         with warmup_scheduler.dampening():
             if isinstance(scheduler, ReduceLROnPlateau):
                 scheduler.step(train_loss)
-            elif config["lr_schedule"]["name"] in ['CosineAnnealingWarmRestarts',
-                                                   'CosineAnnealingLR']:
+            elif config["lr_schedule"]["name"] in [
+                "CosineAnnealingWarmRestarts",
+                "CosineAnnealingLR",
+            ]:
                 pass
             else:  # StepLR / ExponentialLR / others
                 scheduler.step()
@@ -277,8 +295,16 @@ def main(config):  # noqa: C901
 
 
 def train(
-        train_loader, optimizer, model, criterion, epoch, device, config, warmup_scheduler,
-        projector: ProjectWeightsQR, lr_schedule
+    train_loader,
+    optimizer,
+    model,
+    criterion,
+    epoch,
+    device,
+    config,
+    warmup_scheduler,
+    projector: ProjectWeightsQR,
+    lr_schedule,
 ):
     batch_time = AverageMeter("Time", ":6.3f")
     data_time = AverageMeter("Data", ":6.3f")
@@ -341,13 +367,14 @@ def train(
         if warmup_scheduler is not None:
             with warmup_scheduler.dampening():
                 if config["lr_schedule"]["name"] in [
-                    'CosineAnnealingWarmRestarts', 'CosineAnnealingLR'
+                    "CosineAnnealingWarmRestarts",
+                    "CosineAnnealingLR",
                 ]:
                     lr_schedule.step()
                 else:
                     pass
 
-        if (i % config['print_freq'] == 0 or i == len(train_loader) - 1) and config['rank'] == 0:
+        if (i % config["print_freq"] == 0 or i == len(train_loader) - 1) and config["rank"] == 0:
             # console.rule(f"train step {i}")
             argmax = torch.argmax(output, dim=1).to(torch.float32)
             console.print(
@@ -357,10 +384,13 @@ def train(
             )
             progress.display(i + 1)
 
-    if config['rank'] == 0:
+    if config["rank"] == 0:
         mlflow.log_metrics(
-            metrics={"train loss": losses.avg, "train top1": top1.avg.item(),
-                     "train top5": top5.avg.item()},
+            metrics={
+                "train loss": losses.avg,
+                "train top1": top1.avg.item(),
+                "train top5": top5.avg.item(),
+            },
             step=epoch,
         )
     if dist.is_initialized():
@@ -370,11 +400,15 @@ def train(
 
 @torch.no_grad()
 def save_selected_weights(network, epoch):
-    save_list = ["module.conv1.weight", "module.fc.weight",
-                 "module.layer1.1.conv2.weight", "module.layer3.1.conv2.weight",
-                 "module.layer4.0.downsample.0.weight", ]
+    save_list = [
+        "module.conv1.weight",
+        "module.fc.weight",
+        "module.layer1.1.conv2.weight",
+        "module.layer3.1.conv2.weight",
+        "module.layer4.0.downsample.0.weight",
+    ]
     save_location = Path(
-        "/hkfs/work/workspace/scratch/qv2382-dlrt/saved_models/4gpu-svd-tests/normal/resnet18"
+        "/hkfs/work/workspace/scratch/qv2382-dlrt/saved_models/4gpu-svd-tests/normal/resnet18",
     )
     rank = dist.get_rank()
 
@@ -428,8 +462,8 @@ def validate(val_loader, model, criterion, config, epoch):
             num_elem = len(loader) - 1
             for i, (images, target) in enumerate(loader):
                 i = base_progress + i
-                images = images.cuda(config['gpu'], non_blocking=True)
-                target = target.cuda(config['gpu'], non_blocking=True)
+                images = images.cuda(config["gpu"], non_blocking=True)
+                target = target.cuda(config["gpu"], non_blocking=True)
 
                 # compute output
                 output = model(images)
@@ -449,7 +483,7 @@ def validate(val_loader, model, criterion, config, epoch):
                 batch_time.update(time.time() - end)
                 end = time.time()
 
-                if (i % config['print_freq'] == 0 or i == num_elem) and rank == 0:
+                if (i % config["print_freq"] == 0 or i == num_elem) and rank == 0:
                     argmax = torch.argmax(output, dim=1).to(torch.float32)
                     print(
                         f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}",
@@ -461,8 +495,7 @@ def validate(val_loader, model, criterion, config, epoch):
     top1 = AverageMeter("Acc@1", ":6.2f", Summary.AVERAGE)
     top5 = AverageMeter("Acc@5", ":6.2f", Summary.AVERAGE)
     progress = ProgressMeter(
-        len(val_loader) + (
-                    len(val_loader.sampler) * config['world_size'] < len(val_loader.dataset)),
+        len(val_loader) + (len(val_loader.sampler) * config["world_size"] < len(val_loader.dataset)),
         [batch_time, losses, top1, top5],
         prefix="Test: ",
     )
@@ -476,16 +509,16 @@ def validate(val_loader, model, criterion, config, epoch):
         top1.all_reduce()
         top5.all_reduce()
 
-    if len(val_loader.sampler) * config['world_size'] < len(val_loader.dataset):
+    if len(val_loader.sampler) * config["world_size"] < len(val_loader.dataset):
         aux_val_dataset = Subset(
             val_loader.dataset,
-            range(len(val_loader.sampler) * config['world_size'], len(val_loader.dataset)),
+            range(len(val_loader.sampler) * config["world_size"], len(val_loader.dataset)),
         )
         aux_val_loader = torch.utils.data.DataLoader(
             aux_val_dataset,
-            batch_size=config['local_batch_size'],
+            batch_size=config["local_batch_size"],
             shuffle=False,
-            num_workers=config['workers'],
+            num_workers=config["workers"],
             pin_memory=True,
         )
         run_validate(aux_val_loader, len(val_loader))
@@ -497,7 +530,7 @@ def validate(val_loader, model, criterion, config, epoch):
         top1.all_reduce()
         top5.all_reduce()
 
-    if config['rank'] == 0:
+    if config["rank"] == 0:
         mlflow.log_metrics(
             metrics={
                 "val loss": losses.avg.item(),
@@ -625,7 +658,7 @@ def accuracy(output, target, topk=(1,)):
 if __name__ == "__main__":
     args = parser.parse_args()
     # print(args)
-    with open(args.config, 'r') as stream:
+    with open(args.config) as stream:
         config = yaml.safe_load(stream)
 
     # initialize the torch process group across all processes
@@ -633,31 +666,28 @@ if __name__ == "__main__":
     try:
         if int(os.environ["SLURM_NTASKS"]) > 1 or int(os.environ["OMPI_COMM_WORLD_SIZE"]) > 1:
             comm.init(method="nccl-slurm")
-            config['world_size'] = dist.get_world_size()
-            config['rank'] = dist.get_rank()
+            config["world_size"] = dist.get_world_size()
+            config["rank"] = dist.get_rank()
         else:
-            config['world_size'] = 1
-            config['rank'] = 0
+            config["world_size"] = 1
+            config["rank"] = 0
     except KeyError:
         try:
             if int(os.environ["OMPI_COMM_WORLD_SIZE"]) > 1:
                 comm.init(method="nccl-slurm")
-                config['world_size'] = dist.get_world_size()
-                config['rank'] = dist.get_rank()
+                config["world_size"] = dist.get_world_size()
+                config["rank"] = dist.get_rank()
             else:
-                config['world_size'] = 1
-                config['rank'] = 0
+                config["world_size"] = 1
+                config["rank"] = 0
         except KeyError:
-            config['world_size'] = 1
-            config['rank'] = 0
+            config["world_size"] = 1
+            config["rank"] = 0
 
     rank = MPI.COMM_WORLD.Get_rank()
     if rank == 0:
-        mlfutils.restart_mlflow_server(config)
-        mlflow_server = f"http://127.0.0.1:{config['mlflow']['port']}"
-        mlflow.set_tracking_uri(mlflow_server)
-        # print("setting experiment:", config['arch'], type(config['arch']))
-        experiment = mlflow.set_experiment(config['arch'])
+        experiment = mlfutils.setup_mlflow(config, verbose=False)
+
         # run_id -> adaptive needs to be unique, roll random int?
         # run_name = f"" f"full-rank-everybatch-{os.environ['SLURM_JOBID']}"
         with mlflow.start_run() as run:

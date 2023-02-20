@@ -1,22 +1,22 @@
 from __future__ import annotations
 
+import math
+
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.models as models
 import torchvision.transforms as transforms
+from torch import nn
+from torch import Tensor
+from torch.nn import TransformerEncoder
+from torch.nn import TransformerEncoderLayer
+from torch.utils.data import dataset
 from torchvision import datasets
 
 from dlrt import DLRTTrainer
-import torch
-from torch import nn, Tensor
-import torch.nn.functional as F
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from torch.utils.data import dataset
-import math
 
 
 class PositionalEncoding(nn.Module):
-
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
@@ -26,23 +26,29 @@ class PositionalEncoding(nn.Module):
         pe = torch.zeros(max_len, 1, d_model)
         pe[:, 0, 0::2] = torch.sin(position * div_term)
         pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, x: Tensor) -> Tensor:
         """
         Args:
             x: Tensor, shape [seq_len, batch_size, embedding_dim]
         """
-        x = x + self.pe[:x.size(0)]
+        x = x + self.pe[: x.size(0)]
         return self.dropout(x)
 
 
 class TransformerModel(nn.Module):
-
-    def __init__(self, ntoken: int, d_model: int, nhead: int, d_hid: int,
-                 nlayers: int, dropout: float = 0.5):
+    def __init__(
+        self,
+        ntoken: int,
+        d_model: int,
+        nhead: int,
+        d_hid: int,
+        nlayers: int,
+        dropout: float = 0.5,
+    ):
         super().__init__()
-        self.model_type = 'Transformer'
+        self.model_type = "Transformer"
         self.pos_encoder = PositionalEncoding(d_model, dropout)
         encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout)
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
@@ -85,10 +91,6 @@ def main():
     # print(f"")
     # print(f"")
 
-
-
-
-
     # print(f"inp shape: {inp_unf.transpose(1, 2).shape} weight2 shape: {weight2.shape}")
     # # out_unf = inp_unf.transpose(1, 2) @ weight2
     # # # out = torch.nn.functional.fold(out_unf, (7, 8), (1, 1))
@@ -100,8 +102,14 @@ def main():
 
 
 def test_transformer():
-    model = TransformerModel(ntoken=3, d_model=4, d_hid=5, nhead=2,
-                 nlayers=4, dropout=0.5)
+    model = TransformerModel(
+        ntoken=3,
+        d_model=4,
+        d_hid=5,
+        nhead=2,
+        nlayers=4,
+        dropout=0.5,
+    )
     print(model)
 
 

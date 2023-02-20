@@ -1,15 +1,21 @@
-import torch
-import torch.nn as nn
-import torch.distributed as dist
-import pandas as pd
+from __future__ import annotations
+
 from pathlib import Path
 from queue import Queue
+
+import pandas as pd
+import torch
+import torch.distributed as dist
+import torch.nn as nn
 
 
 @torch.no_grad()
 class CompareQR:
     def __init__(
-        self, network: torch.nn.Module, start_with_first_epoch: bool = True, mode="first",
+        self,
+        network: torch.nn.Module,
+        start_with_first_epoch: bool = True,
+        mode="first",
     ):
         # this class is to be used to compare the Q values of each layer to the first epochs values
         # it will use pandas to aggregate the data
@@ -68,8 +74,8 @@ class CompareQR:
                     lp = p.view(p.shape[0], -1)
                 else:
                     lp = p
-                w, _ = torch.linalg.qr(lp, mode='complete')
-                wt, _ = torch.linalg.qr(lp.T, mode='complete')
+                w, _ = torch.linalg.qr(lp, mode="complete")
+                wt, _ = torch.linalg.qr(lp.T, mode="complete")
                 self.prevwq.put(w)
                 self.prevwtq.put(wt)
             return
@@ -88,12 +94,12 @@ class CompareQR:
             wtq0 = self.prevwtq.get()
             wtqt0 = wtq0.T
             # wq + wqt
-            wq, _ = torch.linalg.qr(lp, mode='complete')
+            wq, _ = torch.linalg.qr(lp, mode="complete")
             wq_perc = self._compare_q_cos(wq0, wq)
             wqt_perc = self._compare_q_cos(wqt0, wq.T)
 
             # wtq + wtqt
-            wtq, _ = torch.linalg.qr(lp.T, mode='complete')
+            wtq, _ = torch.linalg.qr(lp.T, mode="complete")
             wtq_perc = self._compare_q_cos(wtq0, wtq)
             wtqt_perc = self._compare_q_cos(wtqt0, wtq.T)
 
@@ -153,14 +159,13 @@ class CompareQR:
         more_than_one_std = (cdist >= (mu + std)).sum().item() / cdist.shape[0]
         return mu, std, mn, mx, more_than_one_std
 
-
     def generate_pd_dfs(self, save=True, out_folder=None):
         self.wq_df = pd.DataFrame.from_dict(self.wq_dict)
         self.wtq_df = pd.DataFrame.from_dict(self.wtq_dict)
         self.wqt_df = pd.DataFrame.from_dict(self.wqt_dict)
         self.wtqt_df = pd.DataFrame.from_dict(self.wtqt_dict)
         if save and out_folder is None:
-            raise ValueError(f"out_folder must be specified to save qr comparisons")
+            raise ValueError("out_folder must be specified to save qr comparisons")
         if save:
             self.save_dfs(out_folder)
 
@@ -207,9 +212,9 @@ class QRProjectWeights:
                 lp = p
 
             if lp.shape[0] > lp.shape[1]:
-                q, _ = torch.linalg.qr(lp, mode='complete')
+                q, _ = torch.linalg.qr(lp, mode="complete")
             else:
-                q, _ = torch.linalg.qr(lp.T, mode='complete')
+                q, _ = torch.linalg.qr(lp.T, mode="complete")
             self.tracking_q.put(q)
 
     @torch.no_grad()
@@ -233,11 +238,11 @@ class QRProjectWeights:
             # Q0 = P x Qlocal -> P = Q0 x Qlocal.T
             if lp.shape[0] > lp.shape[1]:
                 # TODO: test mode=r / reduced
-                localq, localr = torch.linalg.qr(lp, mode='complete')
+                localq, localr = torch.linalg.qr(lp, mode="complete")
                 new = qbase @ localr
                 p.set_(new.view(shp).contiguous())
             else:
-                localq, localr = torch.linalg.qr(lp.T, mode='complete')
+                localq, localr = torch.linalg.qr(lp.T, mode="complete")
                 new = qbase @ localr
                 p.set_(new.T.view(shp).contiguous())
 
@@ -245,15 +250,15 @@ class QRProjectWeights:
                 dist.all_reduce(p, dist.ReduceOp.AVG)
 
             if lp.shape[0] > lp.shape[1]:
-                qbase, _ = torch.linalg.qr(lp, mode='complete')
+                qbase, _ = torch.linalg.qr(lp, mode="complete")
             else:
-                qbase, _ = torch.linalg.qr(lp.T, mode='complete')
+                qbase, _ = torch.linalg.qr(lp.T, mode="complete")
 
             self.tracking_q.put(qbase)
 
     @staticmethod
     def _avg_q_avg_r(network):
-        print('custom reduction')
+        print("custom reduction")
         for n, p in network.named_parameters():
             if p.ndim == 1:
                 continue
@@ -264,7 +269,7 @@ class QRProjectWeights:
                 lp = p
 
             # Q0 = P x Qlocal -> P = Q0 x Qlocal.T
-            localq, localr = torch.linalg.qr(lp, mode='reduced')
+            localq, localr = torch.linalg.qr(lp, mode="reduced")
             localq = localq.contiguous()
             dist.all_reduce(localq, dist.ReduceOp.AVG)
             new = localq @ localr
@@ -290,5 +295,4 @@ class ProjectGrads:
     def set_hook(self):
         # instead of working at the comm hook level, we will work at the backward hook level
 
-        
         pass

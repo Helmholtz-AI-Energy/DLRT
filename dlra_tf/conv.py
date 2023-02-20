@@ -81,11 +81,11 @@ class Conv2d_lr(torch.nn.Module):
             ),
             requires_grad=True,
         )
-        self.lr = True if self.rank != None else False
+        self.lr = True if self.rank is not None else False
         self.rmax = int(min([self.out_channels, self.in_channels * self.kernel_size_number]) / 2)
         self.full_rank_construct = full_rank_construct
         if not self.fixed:
-            self.rank = None if rank == None else min([rank, self.rmax])
+            self.rank = None if rank is None else min([rank, self.rmax])
         else:
             self.rank = min([rank, self.out_channels, self.in_channels * self.kernel_size_number])
         self.dynamic_rank = self.rank
@@ -99,7 +99,7 @@ class Conv2d_lr(torch.nn.Module):
         self.reset_parameters()
 
         # Weights and Bias initialization
-        if self.load_weights == None:
+        if self.load_weights is None:
             self.reset_parameters()
         else:
             param, b = self.load_weights
@@ -172,7 +172,7 @@ class Conv2d_lr(torch.nn.Module):
         w, b = self.weight, self.bias
         device = self.device
         if not self.fixed:
-            self.rank = None if self.rank == None else min([self.rank, self.rmax])
+            self.rank = None if self.rank is None else min([self.rank, self.rmax])
         else:
             self.rank = min(
                 [self.rank, self.out_channels, self.in_channels * self.kernel_size_number],

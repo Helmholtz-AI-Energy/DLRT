@@ -7,6 +7,12 @@ import shutil
 import time
 from enum import Enum
 
+import comm
+import datasets as dsets
+import mlflow.pytorch
+import mlflow_utils as mlfutils
+import optimizer as opt
+import pytorch_warmup as warmup
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.nn as nn
@@ -15,34 +21,25 @@ import torch.optim
 import torch.optim.lr_scheduler as lr_schedules
 import torch.utils.data.distributed
 import torchvision.models as models
+import yaml
+from mpi4py import MPI
 from PIL import ImageFile
+from rich import print as rprint
+from rich.columns import Columns
+from rich.console import Console
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
 
 import dlrt
 
-import comm
-import datasets as dsets
-import optimizer as opt
-
-from rich import print as rprint
-from rich.columns import Columns
-
-from rich.console import Console
-
 # import cProfile, pstats, io
 # from pstats import SortKey
 # pr = cProfile.Profile()
 
-import pytorch_warmup as warmup
-import yaml
-import mlflow
-import mlflow.pytorch
-from mpi4py import MPI
-
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 console = Console(width=140)
+
 
 class ToyNet(nn.Module):
     def __init__(self):
@@ -102,38 +99,38 @@ def main(config):  # noqa: C901
     try:
         if int(os.environ["SLURM_NTASKS"]) > 1:
             comm.init(method="nccl-slurm")
-            config['world_size'] = dist.get_world_size()
-            config['rank'] = dist.get_rank()
+            config["world_size"] = dist.get_world_size()
+            config["rank"] = dist.get_rank()
         else:
-            config['world_size'] = 1
-            config['rank'] = 0
+            config["world_size"] = 1
+            config["rank"] = 0
     except KeyError:
-        config['world_size'] = 1
-        config['rank'] = 0
+        config["world_size"] = 1
+        config["rank"] = 0
 
-    if config['rank'] == 0:
-        mlflow.log_params({"world_size": config['world_size'], "rank": config['rank']})
+    if config["rank"] == 0:
+        mlflow.log_params({"world_size": config["world_size"], "rank": config["rank"]})
 
     # create model
-    if config['arch'] == "toynet":
+    if config["arch"] == "toynet":
         model = ToyNet()
-    elif config['pretrained']:
+    elif config["pretrained"]:
         print(f"=> using pre-trained model '{config['arch']}'")
-        model = models.__dict__[config['arch']](pretrained=True)
+        model = models.__dict__[config["arch"]](pretrained=True)
     else:
         print(f"=> creating model '{config['arch']}'")
-        model = models.__dict__[config['arch']]()
+        model = models.__dict__[config["arch"]]()
 
     # For multiprocessing distributed, DistributedDataParallel constructor
     # should always set the single device scope, otherwise,
     # DistributedDataParallel will use all available devices.
     if dist.is_initialized():
-        config['gpu'] = dist.get_rank() % torch.cuda.device_count()  # only 4 gpus/node
-        print(config['gpu'])
+        config["gpu"] = dist.get_rank() % torch.cuda.device_count()  # only 4 gpus/node
+        print(config["gpu"])
     else:
-        config['gpu'] = 0
-    torch.cuda.set_device(config['gpu'])
-    model.cuda(config['gpu'])
+        config["gpu"] = 0
+    torch.cuda.set_device(config["gpu"])
+    model.cuda(config["gpu"])
     device = torch.device(f"cuda:{config['gpu']}")
 
     # criterion = nn.CrossEntropyLoss().to(device)
@@ -146,32 +143,32 @@ def main(config):  # noqa: C901
 
     if not dist.is_initialized():
         # TODO: test with 1 process
-        config['dlrt']['ddp_dlrt_layers'] = None
+        config["dlrt"]["ddp_dlrt_layers"] = None
 
     dlrt_trainer = dlrt.DLRTTrainer(
         torch_model=model,
-        optimizer_name=config['optimizer']['name'],
+        optimizer_name=config["optimizer"]["name"],
         optimizer_kwargs={
-            "lr": config['learning_rate'],
-            **config['optimizer']['params'],
+            "lr": config["learning_rate"],
+            **config["optimizer"]["params"],
             # "momentum": config['optimizer']['momentum'],
             # "weight_decay": config['optimizer']['weight_decay'],
             # "nesterov": config['optimizer']['nesterov'],
         },
-        adaptive=config['dlrt']['adaptive'],
+        adaptive=config["dlrt"]["adaptive"],
         criterion=nn.CrossEntropyLoss().to(device),
-        mixed_precision=config['mixed'],
-        rank_percent=config['dlrt']['rank_percent'],
-        epsilon={"linear": config['dlrt']['eps_linear'], "conv2d": config['dlrt']['eps_conv']},
-        split_batch=config['dlrt']['split_batch'],
-        dense_first_layer=config['dlrt']['dense_first_layer'],
-        dense_last_layer=config['dlrt']['dense_last_layer'],
-        pretrain_count=config['dlrt']['pretrain_count'],
-        ddp_dlrt_layers=config['dlrt']['ddp_dlrt_layers'],
+        mixed_precision=config["mixed"],
+        rank_percent=config["dlrt"]["rank_percent"],
+        epsilon={"linear": config["dlrt"]["eps_linear"], "conv2d": config["dlrt"]["eps_conv"]},
+        split_batch=config["dlrt"]["split_batch"],
+        dense_first_layer=config["dlrt"]["dense_first_layer"],
+        dense_last_layer=config["dlrt"]["dense_last_layer"],
+        pretrain_count=config["dlrt"]["pretrain_count"],
+        ddp_dlrt_layers=config["dlrt"]["ddp_dlrt_layers"],
     )
     # TODO: fix model printing...
     # print(dlrt_trainer.dlrt_model.)
-    if config['rank'] == 0 and not dlrt_trainer.in_pretrain:
+    if config["rank"] == 0 and not dlrt_trainer.in_pretrain:
         # print(dlrt_trainer.model.get_all_ranks())
         columns = Columns(dlrt_trainer.dlrt_model.get_all_ranks(), equal=True, expand=True)
         rprint(columns)
@@ -186,7 +183,7 @@ def main(config):  # noqa: C901
     # warmup_scheduler = warmup.LinearWarmup(optimizer, warmup_period=warmup_period)
     scheduler, warmup_scheduler = opt.get_lr_schedules(config=config, optim=dlrt_trainer.optimizer)
 
-    if config['rank'] == 0:
+    if config["rank"] == 0:
         mlflow.log_params(config)
         for cat in ["dlrt", "lr_schedule", "lr_warmup", "optimizer"]:
             for k in config[cat]:
@@ -198,25 +195,25 @@ def main(config):  # noqa: C901
 
     # optionally resume from a checkpoint
     # TODO: add DLRT checkpointing
-    if config['resume']:
-        if os.path.isfile(config['resume']):
+    if config["resume"]:
+        if os.path.isfile(config["resume"]):
             print(f"=> loading checkpoint: {config['resume']}")
-            if config['gpu'] is None:
-                checkpoint = torch.load(config['resume'])
+            if config["gpu"] is None:
+                checkpoint = torch.load(config["resume"])
             elif torch.cuda.is_available():
                 # Map model to be loaded to specified single gpu.
                 loc = f"cuda:{config['gpu']}"
-                checkpoint = torch.load(config['resume'], map_location=loc)
-            config['start_epoch'] = checkpoint["epoch"]
+                checkpoint = torch.load(config["resume"], map_location=loc)
+            config["start_epoch"] = checkpoint["epoch"]
             best_acc1 = checkpoint["best_acc1"]
-            if config['gpu'] is not None:
+            if config["gpu"] is not None:
                 # best_acc1 may be from a checkpoint from a different GPU
-                best_acc1 = best_acc1.to(config['gpu'])
+                best_acc1 = best_acc1.to(config["gpu"])
             model.load_state_dict(checkpoint["state_dict"])
             # optimizer.load_state_dict(checkpoint["optimizer"])
             scheduler.load_state_dict(checkpoint["scheduler"])
             print(
-                "=> loaded checkpoint '{}' (epoch {})".format(config['resume'], checkpoint["epoch"]),
+                "=> loaded checkpoint '{}' (epoch {})".format(config["resume"], checkpoint["epoch"]),
             )
         else:
             print(f"=> no checkpoint found at: {config['resume']}")
@@ -229,11 +226,15 @@ def main(config):  # noqa: C901
     # else:
     if config["dataset"] == "imagenet":
         dset_dict = dsets.get_imagenet_datasets(
-            config['data_location'], config['local_batch_size'], config['workers']
+            config["data_location"],
+            config["local_batch_size"],
+            config["workers"],
         )
     elif config["dataset"] == "cifar10":
         dset_dict = dsets.get_cifar10_datasets(
-            config['data_location'], config['local_batch_size'], config['workers']
+            config["data_location"],
+            config["local_batch_size"],
+            config["workers"],
         )
     else:
         raise NotImplementedError(f"Dataset {config['dataset']} not implemented")
@@ -243,8 +244,8 @@ def main(config):  # noqa: C901
     # if config['evaluate']:
     #     validate(val_loader, dlrt_trainer, config)
     #     return
-    for epoch in range(config['start_epoch'], config['epochs']):
-        if config['rank'] == 0:
+    for epoch in range(config["start_epoch"], config["epochs"]):
+        if config["rank"] == 0:
             console.rule(f"Begin epoch {epoch} LR: {dlrt_trainer.optimizer.param_groups[0]['lr']}")
             mlflow.log_metrics(
                 metrics={"lr": dlrt_trainer.optimizer.param_groups[0]["lr"]},
@@ -282,58 +283,62 @@ def main(config):  # noqa: C901
         # evaluate on validation set
         _ = validate(val_loader, dlrt_trainer, config, epoch, len(train_loader))
         # _ = validate_baseline(val_loader, model, criterion, config, epoch)
-        if epoch == 1:
-            console.rule("test stuff")
-            
-            lst = []
-            u, s, v = None, None, None
-            for n, p in dlrt_trainer.dlrt_model.named_parameters():
-                # if n.endswith("s_hat") or n.endswith("u") or n.endswith("v"):
-                #     try:
-                #         lst.append(f'{n}: {p.mean():.4f} {p.min():.4f} {p.max():.4f} {p.std():.4f}')
-                #     except:
-                #         pass
-                if n == "torch_model.conv1.s_hat":
-                    s = p
-                elif n == "torch_model.conv1.u":
-                    u = p
-                elif n == "torch_model.conv1.v":
-                    v = p
-            fwr = u @ s @ v.T  # full weight representation
-            time.sleep(config['rank'] * 2)
-            # cols = Columns(lst, equal=True, expand=True)
-            rprint(fwr.shape)
-            mxsz = max(tuple(fwr.shape))
-            loc_fwrep = torch.eye(mxsz).to(device=fwr.device)
-            loc_fwrep[:fwr.shape[0], :fwr.shape[1]] = fwr
-            w0 = torch.zeros_like(loc_fwrep)
-            if dist.get_rank() == 0:
-                w0 = loc_fwrep
-            dist.broadcast(w0, src=0)
-
-            t = w0 @ torch.linalg.inv(loc_fwrep)
-            # console.rule(f"{dist.get_rank()}")
-            rprint(
-                fwr.mean().item(), fwr.min().item(), fwr.max().item(),
-                fwr.std().item()
-            )
-            new_weights = (t @ loc_fwrep)[:fwr.shape[0], :fwr.shape[1]]
-            rprint(new_weights)
-            rprint(new_weights.mean().item(), new_weights.min().item(), new_weights.max().item(),
-                new_weights.std().item())
-            rprint(fwr - new_weights)
-            # rprint(t)
-            # rprint(torch.linalg.inv(hold))
-            
-            
-            return
+        # if epoch == 1:
+        #     console.rule("test stuff")
+        #
+        #     # lst = []
+        #     u, s, v = None, None, None
+        #     for n, p in dlrt_trainer.dlrt_model.named_parameters():
+        #         # if n.endswith("s_hat") or n.endswith("u") or n.endswith("v"):
+        #         #     try:
+        #         #         lst.append(f'{n}: {p.mean():.4f} {p.min():.4f} {p.max():.4f} {p.std():.4f}')
+        #         #     except:
+        #         #         pass
+        #         if n == "torch_model.conv1.s_hat":
+        #             s = p
+        #         elif n == "torch_model.conv1.u":
+        #             u = p
+        #         elif n == "torch_model.conv1.v":
+        #             v = p
+        #     fwr = u @ s @ v.T  # full weight representation
+        #     time.sleep(config["rank"] * 2)
+        #     # cols = Columns(lst, equal=True, expand=True)
+        #     rprint(fwr.shape)
+        #     mxsz = max(tuple(fwr.shape))
+        #     loc_fwrep = torch.eye(mxsz).to(device=fwr.device)
+        #     loc_fwrep[: fwr.shape[0], : fwr.shape[1]] = fwr
+        #     w0 = torch.zeros_like(loc_fwrep)
+        #     if dist.get_rank() == 0:
+        #         w0 = loc_fwrep
+        #     dist.broadcast(w0, src=0)
+        #
+        #     t = w0 @ torch.linalg.inv(loc_fwrep)
+        #     # console.rule(f"{dist.get_rank()}")
+        #     rprint(
+        #         fwr.mean().item(),
+        #         fwr.min().item(),
+        #         fwr.max().item(),
+        #         fwr.std().item(),
+        #     )
+        #     new_weights = (t @ loc_fwrep)[: fwr.shape[0], : fwr.shape[1]]
+        #     rprint(new_weights)
+        #     rprint(
+        #         new_weights.mean().item(),
+        #         new_weights.min().item(),
+        #         new_weights.max().item(),
+        #         new_weights.std().item(),
+        #     )
+        #     rprint(fwr - new_weights)
+        #     # rprint(t)
+        #     # rprint(torch.linalg.inv(hold))
+        #
+        #     return
 
         with warmup_scheduler.dampening():
             if isinstance(scheduler, ReduceLROnPlateau):
                 scheduler.step(train_loss)
             else:  # StelLR / others
                 scheduler.step()
-                # print(optimizer.param_groups[0]["lr"])
 
 
 def train_baseline(train_loader, optimizer, model, criterion, epoch, device, config, warmup_scheduler):
@@ -381,7 +386,7 @@ def train_baseline(train_loader, optimizer, model, criterion, epoch, device, con
             with warmup_scheduler.dampening():
                 pass
 
-        if (i % config['print_freq'] == 0 or i == len(train_loader) - 1) and config['rank'] == 0:
+        if (i % config["print_freq"] == 0 or i == len(train_loader) - 1) and config["rank"] == 0:
             # console.rule(f"train step {i}")
             argmax = torch.argmax(output, dim=1).to(torch.float32)
             console.print(
@@ -390,7 +395,7 @@ def train_baseline(train_loader, optimizer, model, criterion, epoch, device, con
                 f"min: {argmax.min().item():.5f}, std: {argmax.std().item():.5f}",
             )
             progress.display(i + 1)
-    if config['rank'] == 0:
+    if config["rank"] == 0:
         mlflow.log_metrics(
             metrics={"train loss": losses.avg, "train top1": top1.avg.item(), "train top5": top5.avg.item()},
             step=epoch,
@@ -463,7 +468,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, config, warmup
             with warmup_scheduler.dampening():
                 pass
 
-        if (i % config['print_freq'] == 0 or i == len(train_loader) - 1) and config['rank'] == 0:
+        if (i % config["print_freq"] == 0 or i == len(train_loader) - 1) and config["rank"] == 0:
             # console.rule(f"train step {i}")
             if koutput.output is not None:
                 argmax = torch.argmax(koutput.output, dim=1).to(torch.float32)
@@ -497,7 +502,7 @@ def train(train_loader, trainer: dlrt.DLRTTrainer, epoch, device, config, warmup
         top1.all_reduce()
         top5.all_reduce()
 
-    if config['rank'] == 0:
+    if config["rank"] == 0:
         # mlflow.log_metrics(
         #     metrics={"train loss": losses.avg, "train top1": top1.avg.item(), "train top5": top5.avg.item()},
         #     step=epoch,
@@ -527,8 +532,8 @@ def validate_baseline(val_loader, model, criterion, config, epoch):
             num_elem = len(loader) - 1
             for i, (images, target) in enumerate(loader):
                 i = base_progress + i
-                images = images.cuda(config['gpu'], non_blocking=True)
-                target = target.cuda(config['gpu'], non_blocking=True)
+                images = images.cuda(config["gpu"], non_blocking=True)
+                target = target.cuda(config["gpu"], non_blocking=True)
 
                 # compute output
                 output = model(images)
@@ -548,7 +553,7 @@ def validate_baseline(val_loader, model, criterion, config, epoch):
                 batch_time.update(time.time() - end)
                 end = time.time()
 
-                if (i % config['print_freq'] == 0 or i == num_elem) and rank == 0:
+                if (i % config["print_freq"] == 0 or i == num_elem) and rank == 0:
                     argmax = torch.argmax(output, dim=1).to(torch.float32)
                     print(
                         f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}",
@@ -560,7 +565,7 @@ def validate_baseline(val_loader, model, criterion, config, epoch):
     top1 = AverageMeter("Acc@1", ":6.2f", Summary.AVERAGE)
     top5 = AverageMeter("Acc@5", ":6.2f", Summary.AVERAGE)
     progress = ProgressMeter(
-        len(val_loader) + (len(val_loader.sampler) * config['world_size'] < len(val_loader.dataset)),
+        len(val_loader) + (len(val_loader.sampler) * config["world_size"] < len(val_loader.dataset)),
         [batch_time, losses, top1, top5],
         prefix="Test: ",
     )
@@ -573,16 +578,16 @@ def validate_baseline(val_loader, model, criterion, config, epoch):
         top1.all_reduce()
         top5.all_reduce()
 
-    if len(val_loader.sampler) * config['world_size'] < len(val_loader.dataset):
+    if len(val_loader.sampler) * config["world_size"] < len(val_loader.dataset):
         aux_val_dataset = Subset(
             val_loader.dataset,
-            range(len(val_loader.sampler) * config['world_size'], len(val_loader.dataset)),
+            range(len(val_loader.sampler) * config["world_size"], len(val_loader.dataset)),
         )
         aux_val_loader = torch.utils.data.DataLoader(
             aux_val_dataset,
-            batch_size=config['local_batch_size'],
+            batch_size=config["local_batch_size"],
             shuffle=False,
-            num_workers=config['workers'],
+            num_workers=config["workers"],
             pin_memory=True,
         )
         run_validate(aux_val_loader, len(val_loader))
@@ -593,7 +598,7 @@ def validate_baseline(val_loader, model, criterion, config, epoch):
         top1.all_reduce()
         top5.all_reduce()
 
-    if config['rank'] == 0:
+    if config["rank"] == 0:
         mlflow.log_metrics(
             metrics={
                 "val loss": losses.avg,
@@ -608,18 +613,17 @@ def validate_baseline(val_loader, model, criterion, config, epoch):
 
 
 def validate(val_loader, trainer: dlrt.DLRTTrainer, config, epoch, train_len):
-    if config['rank'] == 0:
+    if config["rank"] == 0:
         console.rule("validation")
 
     def run_validate(loader, base_progress=0):
-        rank = 0 if not dist.is_initialized() else dist.get_rank()
         with torch.no_grad():
             end = time.time()
             num_elem = len(loader) - 1
             for i, (images, target) in enumerate(loader):
                 i = base_progress + i
-                images = images.cuda(config['gpu'], non_blocking=True)
-                target = target.cuda(config['gpu'], non_blocking=True)
+                images = images.cuda(config["gpu"], non_blocking=True)
+                target = target.cuda(config["gpu"], non_blocking=True)
 
                 # compute output
                 output = trainer.valid_step(images, target)
@@ -638,7 +642,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, config, epoch, train_len):
                 batch_time.update(time.time() - end)
                 end = time.time()
 
-                if (i % config['print_freq'] == 0 or i == num_elem):# and config['rank'] == 0:
+                if i % config["print_freq"] == 0 or i == num_elem and config["rank"] == 0:
                     argmax = torch.argmax(output.output, dim=1).to(torch.float32)
                     print(
                         f"output mean: {argmax.mean().item()}, max: {argmax.max().item()}, min: {argmax.min().item()}, std: {argmax.std().item()}",
@@ -650,7 +654,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, config, epoch, train_len):
     top1 = AverageMeter("Acc@1", ":6.2f", Summary.AVERAGE)
     top5 = AverageMeter("Acc@5", ":6.2f", Summary.AVERAGE)
     progress = ProgressMeter(
-        len(val_loader) + (len(val_loader.sampler) * config['world_size'] < len(val_loader.dataset)),
+        len(val_loader) + (len(val_loader.sampler) * config["world_size"] < len(val_loader.dataset)),
         [batch_time, losses, top1, top5],
         prefix="Test: ",
     )
@@ -664,16 +668,16 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, config, epoch, train_len):
         top1.all_reduce()
         top5.all_reduce()
 
-    if len(val_loader.sampler) * config['world_size'] < len(val_loader.dataset):
+    if len(val_loader.sampler) * config["world_size"] < len(val_loader.dataset):
         aux_val_dataset = Subset(
             val_loader.dataset,
-            range(len(val_loader.sampler) * config['world_size'], len(val_loader.dataset)),
+            range(len(val_loader.sampler) * config["world_size"], len(val_loader.dataset)),
         )
         aux_val_loader = torch.utils.data.DataLoader(
             aux_val_dataset,
-            batch_size=config['local_batch_size'],
+            batch_size=config["local_batch_size"],
             shuffle=False,
-            num_workers=config['workers'],
+            num_workers=config["workers"],
             pin_memory=True,
         )
         run_validate(aux_val_loader, len(val_loader))
@@ -684,7 +688,7 @@ def validate(val_loader, trainer: dlrt.DLRTTrainer, config, epoch, train_len):
         top1.all_reduce()
         top5.all_reduce()
 
-    if config['rank'] == 0:
+    if config["rank"] == 0:
         avgloss = losses.avg
         avgtop1 = top1.avg
         avgtop5 = top5.avg
@@ -815,13 +819,12 @@ def accuracy(output, target, topk=(1,)):
 if __name__ == "__main__":
     args = parser.parse_args()
     print(args)
-    with open(args.config, 'r') as stream:
+    with open(args.config) as stream:
         config = yaml.safe_load(stream)
     rank = MPI.COMM_WORLD.Get_rank()
     if rank == 0:
-        print(config)
-        mlflow.set_tracking_uri("file:/hkfs/work/workspace/scratch/qv2382-dlrt/mlflow/")
-        experiment = mlflow.set_experiment(config['arch'])
+        experiment = mlfutils.setup_mlflow(config, verbose=False)
+
         # run_id -> adaptive needs to be unique, roll random int?
         run_name = f"" f"divergence-test-{os.environ['SLURM_JOBID']}"
         with mlflow.start_run():

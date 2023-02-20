@@ -55,5 +55,3 @@ salloc --partition=accelerated \
   --container-mounts="${TOMOUNT}" \
   --container-writable
 #  --container-mount-home \
-
-

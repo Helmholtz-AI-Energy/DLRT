@@ -1,8 +1,11 @@
-import torch
-from torch.optim import _functional as F
-from torch.optim import Optimizer, required
+from __future__ import annotations
 
-import torch.distributions as dist
+import torch
+import torch.distributed as dist
+from torch.optim import _functional as F
+from torch.optim import Optimizer
+
+# from torch.optim import required
 
 
 class QRSGD(Optimizer):
@@ -84,26 +87,38 @@ class QRSGD(Optimizer):
         The Nesterov version is analogously modified.
     """
 
-    def __init__(self, params, lr=required, momentum=0, dampening=0,
-                 weight_decay=0, nesterov=False):
-        if lr is not required and lr < 0.0:
-            raise ValueError("Invalid learning rate: {}".format(lr))
+    def __init__(
+        self,
+        params,
+        lr,
+        momentum=0,
+        dampening=0,
+        weight_decay=0,
+        nesterov=False,
+    ):
+        if lr is not None and lr < 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
         if momentum < 0.0:
-            raise ValueError("Invalid momentum value: {}".format(momentum))
+            raise ValueError(f"Invalid momentum value: {momentum}")
         if weight_decay < 0.0:
-            raise ValueError("Invalid weight_decay value: {}".format(weight_decay))
+            raise ValueError(f"Invalid weight_decay value: {weight_decay}")
 
-        defaults = dict(lr=lr, momentum=momentum, dampening=dampening,
-                        weight_decay=weight_decay, nesterov=nesterov)
+        defaults = dict(
+            lr=lr,
+            momentum=momentum,
+            dampening=dampening,
+            weight_decay=weight_decay,
+            nesterov=nesterov,
+        )
         if nesterov and (momentum <= 0 or dampening != 0):
             raise ValueError("Nesterov momentum requires a momentum and zero dampening")
-        super(SGD, self).__init__(params, defaults)
-        self.isdist = ditst.is_initialized()
+        super().__init__(params, defaults)
+        self.isdist = dist.is_initialized()
 
     def __setstate__(self, state):
-        super(SGD, self).__setstate__(state)
+        super().__setstate__(state)
         for group in self.param_groups:
-            group.setdefault('nesterov', False)
+            group.setdefault("nesterov", False)
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -122,35 +137,37 @@ class QRSGD(Optimizer):
             params_with_grad = []
             d_p_list = []
             momentum_buffer_list = []
-            weight_decay = group['weight_decay']
-            momentum = group['momentum']
-            dampening = group['dampening']
-            nesterov = group['nesterov']
-            lr = group['lr']
+            weight_decay = group["weight_decay"]
+            momentum = group["momentum"]
+            dampening = group["dampening"]
+            nesterov = group["nesterov"]
+            lr = group["lr"]
 
-            for p in group['params']:
+            for p in group["params"]:
                 if p.grad is not None:
                     params_with_grad.append(p)
                     d_p_list.append(p.grad)
 
                     state = self.state[p]
-                    if 'momentum_buffer' not in state:
+                    if "momentum_buffer" not in state:
                         momentum_buffer_list.append(None)
                     else:
-                        momentum_buffer_list.append(state['momentum_buffer'])
+                        momentum_buffer_list.append(state["momentum_buffer"])
 
-            F.sgd(params_with_grad,
-                  d_p_list,
-                  momentum_buffer_list,
-                  weight_decay=weight_decay,
-                  momentum=momentum,
-                  lr=lr,
-                  dampening=dampening,
-                  nesterov=nesterov)
+            F.sgd(
+                params_with_grad,
+                d_p_list,
+                momentum_buffer_list,
+                weight_decay=weight_decay,
+                momentum=momentum,
+                lr=lr,
+                dampening=dampening,
+                nesterov=nesterov,
+            )
 
             # update momentum_buffers in state
             for p, momentum_buffer in zip(params_with_grad, momentum_buffer_list):
                 state = self.state[p]
-                state['momentum_buffer'] = momentum_buffer
+                state["momentum_buffer"] = momentum_buffer
 
         return loss

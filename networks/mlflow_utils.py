@@ -1,16 +1,18 @@
+from __future__ import annotations
+
 import os
 import subprocess
 import time
 
 import mlflow
-from mlflow.tracking import MlflowClient
-import torch
 import torch.distributed as dist
 
 __all__ = ["setup_mlflow"]
 
+from mlflow.entities import Experiment
 
-def print0(*args, sep=' ', end='\n', file=None):
+
+def print0(*args, sep=" ", end="\n", file=None):
     if dist.is_initialized() and dist.get_rank() == 0:
         print(*args, sep=sep, end=end, file=file)
     elif dist.is_initialized():
@@ -19,28 +21,30 @@ def print0(*args, sep=' ', end='\n', file=None):
         print(*args, sep=sep, end=end, file=file)
 
 
-def setup_mlflow(config: dict) -> int:
+def setup_mlflow(config: dict, verbose: bool = False) -> Experiment | None:
     """Setup MLFlow server, connect to it, and set the experiment
 
     Parameters
     ----------
     config: dict
         Config dictionary
+    verbose: bool
+        if this should print the mlflow server on rank0
 
     exp_id: int
         MLFlow experiment ID
     """
-
+    if dist.get_rank() != 0:
+        return
     restart_mlflow_server(config)
-
-    # Connect to the MLFlow client for tracking this training
+    # Connect to the MLFlow client for tracking this training - only on rank0!
     mlflow_server = f"http://127.0.0.1:{config['mlflow']['port']}"
     mlflow.set_tracking_uri(mlflow_server)
-    print0(f"MLFlow connected to server {mlflow_server}")
+    if verbose:
+        print0(f"MLFlow connected to server {mlflow_server}")
 
-    # Setup experiment
-    exp_id = set_mlflow_experiment(config)
-    return exp_id
+    experiment = mlflow.set_experiment(config["arch"])
+    return experiment
 
 
 def restart_mlflow_server(config: dict):

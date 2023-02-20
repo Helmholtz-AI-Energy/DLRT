@@ -6,7 +6,6 @@ from collections import namedtuple
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-
 from rich import print
 from rich.columns import Columns
 from rich.console import Console
@@ -32,7 +31,7 @@ class DLRTNetwork(nn.Module):
         ddp_dlrt_layers: bool = False,
         dense_first_layer: bool = False,
         dense_last_layer: bool = False,
-        pretrain_count: int = 0
+        pretrain_count: int = 0,
     ):
         super().__init__()
         self.adaptive = adaptive
@@ -64,7 +63,6 @@ class DLRTNetwork(nn.Module):
             self.ddp_dlrt_layers = ddp_dlrt_layers
             self.rank = dist.get_rank()
 
-
         self.pretrain_count = pretrain_count
         self.in_pretrain = lambda: self.pretrain_count > 0
         self.dense_last_layer = dense_last_layer
@@ -79,13 +77,15 @@ class DLRTNetwork(nn.Module):
         self.first_layer = None
         self.dlrt_model = self._replace_layers(
             self.torch_model,
-            pretrain=self.in_pretrain()
+            pretrain=self.in_pretrain(),
         )
         if self.dense_last_layer:
             self.dlrt_model = self._reset_last_layer_to_dense(self.dlrt_model)
 
         self.__run_command_on_dlrt_layers(
-            module=self.dlrt_model, command="set_dlrt_requires_grad", kwargs={"requires": False}
+            module=self.dlrt_model,
+            command="set_dlrt_requires_grad",
+            kwargs={"requires": False},
         )
 
         if dist.is_initialized():
@@ -117,7 +117,7 @@ class DLRTNetwork(nn.Module):
             #     find_unused_parameters=False,
             # )
             for layer in self.dlrt_model.children():
-                if hasattr(layer, 'reset_parameters'):
+                if hasattr(layer, "reset_parameters"):
                     layer.reset_parameters()
         else:
             # pass
@@ -168,9 +168,13 @@ class DLRTNetwork(nn.Module):
 
         for name, child in module.named_children():
             module_output.add_module(
-                name, self._replace_layers(
-                    child, pretrain=pretrain, name=name, process_group=process_group
-                )
+                name,
+                self._replace_layers(
+                    child,
+                    pretrain=pretrain,
+                    name=name,
+                    process_group=process_group,
+                ),
             )
         del module
         return module_output
@@ -207,12 +211,12 @@ class DLRTNetwork(nn.Module):
 
     def set_layer_case(self, case):
         # set the training case of all DLRT layers (conv/linear)
-        models = [self.dlrt_model, ]
+        models = [self.dlrt_model]
         # self.optimizer.zero_grad(set_to_none=True)
         # self.dlrt_model.train()
         if case == "k":
             try:
-                models.append(getattr(self, f"kmodel"))
+                models.append(getattr(self, "kmodel"))
                 # self._set_training_all_params(network=self.kmodel, totrain=True)
             except AttributeError:
                 pass
@@ -221,7 +225,7 @@ class DLRTNetwork(nn.Module):
             # self.dlrt_model.eval()
             # self._set_training_all_params(network=self.dlrt_model, totrain=False)
             try:
-                models.append(getattr(self, f"kmodel"))
+                models.append(getattr(self, "kmodel"))
                 # self._set_training_all_params(network=self.lmodel, totrain=False)
             except AttributeError:
                 pass
@@ -252,7 +256,9 @@ class DLRTNetwork(nn.Module):
 
     def run_rank_adaption(self, skip=False, all_reduce_method="average"):
         self.__run_command_on_dlrt_layers(
-            module=self.dlrt_model, command="rank_adaption", kwargs={"skip": skip}
+            module=self.dlrt_model,
+            command="rank_adaption",
+            kwargs={"skip": skip},
         )
         # self.__run_command_on_dlrt_layers(
         #     module=self.dlrt_model, command="all_reduce", kwargs={"method": all_reduce_method}

@@ -10,17 +10,16 @@ from typing import Union
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-from torch import Tensor
-from torch.nn import common_types
-import torch.distributed as dist
-
-from .basic import DLRTModule
-
 from rich.columns import Columns
 from rich.console import Console
 from rich.pretty import Pretty
+from torch import Tensor
+from torch.nn import common_types
+
+from .basic import DLRTModule
 
 console = Console(width=140)
 
@@ -63,7 +62,7 @@ def DLRTConv2d(
             eps_adapt,
             # convert_from_weights=convert_from_weights,
             # existing_bias=existing_bias,
-            pretrain=pretrain
+            pretrain=pretrain,
         )
     else:
         return DLRTConv2dFixed(
@@ -719,7 +718,7 @@ class DLRTConv2dAdaptive(_ConvNd):
             .to(input.device)
             .transpose(1, 2)
         )
-        eps = torch.finfo(inp_unf.dtype).eps
+        eps = torch.finfo(inp_unf.dtype).eps  # noqa: F841
         if self.train_case == "pretrain":
             out_unf = inp_unf @ self.fullweight.T
         elif self.train_case == "k" or not self.training:
@@ -959,10 +958,10 @@ class DLRTConv2dAdaptive(_ConvNd):
             # TODO: transpose V?
             # 1. get full weight representation
             fwr = self.u @ self.s_hat @ self.v.T  # full weight representation
-            # 2. pad weight representation into 
+            # 2. pad weight representation into
             mxsz = max(tuple(fwr.shape))
             loc_fwrep = torch.eye(mxsz).to(device=fwr.device)
-            loc_fwrep[:fwr.shape[0], :fwr.shape[1]] = fwr
+            loc_fwrep[: fwr.shape[0], : fwr.shape[1]] = fwr
             w0 = torch.zeros_like(loc_fwrep)
             if dist.get_rank() == 0:
                 w0 = loc_fwrep

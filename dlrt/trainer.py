@@ -107,13 +107,15 @@ class DLRTTrainer:
             return (inputs, inputs, inputs), (labels, labels, labels)
         elif self.split_batch == "halfs":
             half = inputs.shape[0] // 2
-            return (inputs[:half], inputs[half:], inputs), \
-                (labels[:half], labels[half:], labels)
+            return (inputs[:half], inputs[half:], inputs), (labels[:half], labels[half:], labels)
         elif self.split_batch == "thirds":
             third1 = inputs.shape[0] // 3
             third2 = third1 * 2
-            return (inputs[:third1], inputs[third1:third2], inputs[third2:]), \
-                (labels[:third1], labels[third1:third2], labels[third2:])
+            return (inputs[:third1], inputs[third1:third2], inputs[third2:]), (
+                labels[:third1],
+                labels[third1:third2],
+                labels[third2:],
+            )
         else:
             raise ValueError("Unsupported option for split batch")
 
@@ -172,7 +174,7 @@ class DLRTTrainer:
             self.counter += 1
             if self.counter == self.pretrain_count:
                 # convert the model here!
-                print(f"stopping pretraining...")
+                print("stopping pretraining...")
                 self.dlrt_model.stop_pretraining()
                 # with torch.no_grad():
                 #     self.dlrt_model.set_layer_case(case="k")
