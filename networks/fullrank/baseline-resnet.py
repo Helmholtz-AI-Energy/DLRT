@@ -9,10 +9,7 @@ from enum import Enum
 from pathlib import Path
 
 import comm
-import datasets as dsets
 import mlflow.pytorch
-import mlflow_utils as mlfutils
-import optimizer as opt
 import pytorch_warmup as warmup
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
@@ -32,6 +29,10 @@ from torch.optim.lr_scheduler import ExponentialLR
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
+
+from .. import datasets as dsets
+from .. import mlflow_utils as mlfutils
+from .. import optimizer as opt
 
 # import cProfile, pstats, io
 # from pstats import SortKey
