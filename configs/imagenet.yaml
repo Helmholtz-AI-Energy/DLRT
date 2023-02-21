@@ -1,0 +1,81 @@
+# data and loaders
+dataset: imagenet
+# !!! data_location MUST BE ON LINE 4 and REQUIRES double quotes !!! -> removed
+data_location: "/hkfs/work/workspace/scratch/qv2382-dlrt/datasets/imagenet/"
+# ws imagenet: "/hkfs/work/workspace/scratch/qv2382-dlrt/datasets/imagenet/"
+# imagenet: "/hkfs/home/dataset/datasets/imagenet-2012/original/imagenet-raw/ILSVRC/Data/CLS-LOC/"
+# cifar10: "/hkfs/home/dataset/datasets/CIFAR10/"
+# cifar100: "/hkfs/home/dataset/datasets/CIFAR100/"
+# mnist: "/hkfs/work/workspace/scratch/qv2382-dlrt/datasets/mnist"
+workers: 6
+
+# general training parameters
+start_epoch: 0
+epochs: 90
+print_freq: 10
+resume: null  # path to latest checkpoint (default: none)
+evaluate: False
+pretrained: False
+seed: 42
+# network
+arch: resnet50
+mixed: False
+local_batch_size: 256  # 512 -> OOM error
+# learning rate
+learning_rate: 0.4
+label_smoothing: 0.1
+qr_warmup: -1
+lr_schedule:
+#  name: ExponentialLR
+#  params:
+#    gamma: 0.95
+  name: StepLR
+  params:
+    step_size: 30
+    gamma: 0.1
+#  name: CosineAnnealingWarmRestarts
+#  params:
+#    eta_min: 0
+#    T_mult: 1
+#    last_epoch=- 1
+#  name: CyclicLR
+#  params:
+#    base_lr: 0.001
+#    mode: exp_range
+#    gamma: 0.95
+#    step_size_up:
+
+lr_warmup:
+  name: LinearWarmup
+  params:
+    warmup_period: 1000
+# optimizer
+optimizer:
+#  name: Adam
+#  params:
+#    betas: [0.9,0.999]
+#    eps: 1.0E-8
+#    weight_decay: 0.0
+#    amsgrad: False
+  name: SGD
+  params:
+    momentum: 0.9
+    weight_decay: 0.00002
+    nesterov: True
+
+# DLRT params
+dlrt:
+  adaptive: True
+  skip_adapt: False
+  rank_percent: 0.4
+  eps_linear: 0.1
+  eps_conv: 0.1
+  ddp_dlrt_layers: False
+  split_batch: halfs  # repeat, halfs, thirds
+  dense_first_layer: False
+  dense_last_layer: True
+  pretrain_count: -1
+mlflow:
+  artifact_location: file:/hkfs/work/workspace/scratch/qv2382-dlrt/mlflowsql/artifacts/
+  tracking_uri: sqlite:////hkfs/work/workspace/scratch/qv2382-dlrt/mlflowsql/runsdb.sqlite
+  port: 24685

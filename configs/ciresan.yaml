@@ -1,0 +1,69 @@
+# data and loaders
+dataset: mnist
+# !!! data_location MUST BE ON LINE 4 and REQUIRES double quotes !!!
+data_location: "/hkfs/work/workspace/scratch/qv2382-dlrt/datasets/mnist"
+# ws imagenet: "/hkfs/work/workspace/scratch/qv2382-dlrt/datasets/imagenet/"
+# imagenet: "/hkfs/home/dataset/datasets/imagenet-2012/original/imagenet-raw/ILSVRC/Data/CLS-LOC/"
+# cifar10: "/hkfs/home/dataset/datasets/CIFAR10/"
+# cifar100: "/hkfs/home/dataset/datasets/CIFAR100/"
+# mnist: "/hkfs/work/workspace/scratch/qv2382-dlrt/datasets/mnist"
+workers: 4
+
+# general training parameters
+start_epoch: 0
+epochs: 90
+print_freq: 40
+resume: null  # path to latest checkpoint (default: none)
+evaluate: False
+pretrained: False
+seed: 42
+# network
+arch: ciresan4
+citation: https://arxiv.org/pdf/1003.0358.pdf
+
+mixed: False
+local_batch_size: 512  # 256 - repeat  # 768 - thirds  # 512 - halfs
+# learning rate
+learning_rate: 0.01
+lr_schedule:
+#  name: ExponentialLR
+#  params:
+#    gamma: 0.95
+  name: StepLR
+  params:
+    step_size: 30
+    gamma: 0.1
+lr_warmup:
+  name: LinearWarmup
+  params:
+    warmup_period: 100
+# optimizer
+optimizer:
+#  name: Adam
+#  params:
+#    betas: [0.9,0.999]
+#    eps: 1.0E-8
+#    weight_decay: 0.0
+#    amsgrad: False
+  name: SGD
+  params:
+    momentum: 0.1
+    weight_decay: 1.0E-4
+    nesterov: False
+
+# DLRT params
+dlrt:
+  adaptive: True
+  skip_adapt: False
+  rank_percent: 0.4
+  eps_linear: 0.1
+  eps_conv: 0.1
+  ddp_dlrt_layers: False
+  split_batch: halfs  # repeat, halfs, thirds
+  dense_first_layer: False
+  dense_last_layer: True
+  pretrain_count: -1
+mlflow:
+  artifact_location: file:/hkfs/work/workspace/scratch/qv2382-dlrt/mlflowsql/artifacts/
+  tracking_uri: sqlite:////hkfs/work/workspace/scratch/qv2382-dlrt/mlflowsql/runsdb.sqlite
+  port: 24685
