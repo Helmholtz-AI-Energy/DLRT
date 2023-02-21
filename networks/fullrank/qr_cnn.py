@@ -216,7 +216,7 @@ def main(config):  # noqa: C901
     # comp1 = CompareQR(network=model, mode='first')
     # compprev = CompareQR(network=model, mode='1previous')
     # model.register_comm_hook(state=None, hook=project_bucket)
-    projector = ProjectWeightsQR(network=model)
+    projector = ProjectWeightsQR(network=model, method=config["qr_merge_method"])
     # projector = ProjectWeightsHoldQ(network=model)
     for epoch in range(config["start_epoch"], config["epochs"]):
         if config["rank"] == 0:
@@ -335,13 +335,11 @@ def train(
         loss = criterion(output, target)
         loss.backward()
 
-        # projector.update_and_project_grads()
-
         optimizer.step()
 
         # if epoch < 5 or i == len(train_loader) - 1:
         # if i == len(train_loader) - 1:
-        # projector.project_weights(sync_level="all")
+        projector.project_weights(sync_level="all", qr_mode=config["qr_mode"])
         # elif i % 2 == 0:
         #     projector.project_weights(sync_level="q")
         # else:
@@ -692,8 +690,8 @@ if __name__ == "__main__":
         # run_name = f"" f"full-rank-everybatch-{os.environ['SLURM_JOBID']}"
         with mlflow.start_run() as run:
             mlflow.log_param("Slurm jobid", os.environ["SLURM_JOBID"])
-            # run_name = "syncall-grads-complete-" + run.info.run_name
-            run_name = f"baseline-cifar100-ws-{config['world_size']}"
+            run_name = f"{config['run_name']}" + run.info.run_name
+            # run_name = f"baseline-cifar100-ws-{config['world_size']}"
             mlflow.set_tag("mlflow.runName", run_name)
             # mlflow.get_tag()
             print("run_name:", run_name)
