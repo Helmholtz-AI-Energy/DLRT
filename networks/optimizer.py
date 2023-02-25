@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import comm
-import datasets as dsets
+from networks import comm
+from networks import datasets as dsets
 import mlflow.pytorch
 import pytorch_warmup as warmup
 import torch.backends.cudnn as cudnn

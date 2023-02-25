@@ -7,10 +7,10 @@ import shutil
 import time
 from enum import Enum
 
-import comm
-import datasets as dsets
+from network import comm
+from network import datasets as dsets
 import mlflow.pytorch
-import mlflow_utils as mlfutils
+import network.mlflow_utils as mlfutils
 import optimizer as opt
 import pytorch_warmup as warmup
 import torch.backends.cudnn as cudnn

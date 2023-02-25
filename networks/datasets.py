@@ -273,32 +273,33 @@ def cifar10_val_dataset_n_loader(base_dir, batch_size, workers=6):
     return test_dataset, test_loader
 
 
-def cifar100_train_dataset_plus_loader(base_dir, batch_size, workers=6):
+def cifar100_train_dataset_plus_loader(base_dir, batch_size, workers=6, timm_transforms=True):
     # CIFAR-10 dataset
     train_dir = Path(base_dir) / "train"
 
-    timm_transforms = create_transform(
-        32,
-        is_training=True,
-        auto_augment="rand-m9-mstd0.5",
-        mean=(0.4914, 0.4822, 0.4465),
-        std=(0.2023, 0.1994, 0.2010),
-    )
-
-    # transform = transforms.Compose(
-    #     [
-    #         transforms.Pad(4),
-    #         transforms.RandomHorizontalFlip(),
-    #         transforms.RandomCrop(32),
-    #         transforms.ToTensor(),
-    #         cifar10_normalize,
-    #     ],
-    # )
+    if timm_transforms:
+        transform = create_transform(
+            32,
+            is_training=True,
+            auto_augment="rand-m9-mstd0.5",
+            mean=(0.4914, 0.4822, 0.4465),
+            std=(0.2023, 0.1994, 0.2010),
+        )
+    else:
+        transform = transforms.Compose(
+            [
+                transforms.Pad(4),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomCrop(32),
+                transforms.ToTensor(),
+                cifar10_normalize,
+            ],
+        )
 
     train_dataset = datasets.CIFAR100(
         root=str(train_dir),
         train=True,
-        transform=timm_transforms,  # transform,  # timm_transforms,
+        transform=transform,  # timm_transforms,
         # download=True,
     )
 

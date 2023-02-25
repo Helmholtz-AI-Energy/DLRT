@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # Slurm job configuration
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=4
 #SBATCH --gres=gpu:2
 #SBATCH --time=04:00:00
 #SBATCH --job-name=qr-opt-ddp
@@ -65,4 +65,4 @@ export CUDA_VISIBLE_DEVICES="0,1,2,3"
 #    bash -c "TORCH_DISTRIBUTED_DEBUG=DETAIL python -u baseline-resnet.py --config ${CONFIGS}resnet18.yaml"
 
 
-srun "${SRUN_PARAMS[@]}" bash -c "python -u ${SCRIPT_DIR}DLRT/networks/qr_cnn.py --config ${CONFIGS}cifar100.yaml"
+srun "${SRUN_PARAMS[@]}" bash -c "python -u ${SCRIPT_DIR}DLRT/networks/fullrank/qr_cnn.py --config ${CONFIGS}cifar100.yaml"

@@ -6,11 +6,101 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import linalg
 
 
 class ProjectSVD:
     def __init__(self, network):
         self.network = network
+
+    @torch.no_grad()
+    def _project_vectors(
+            self, basis0, basis1, s0, s1, max_vectors, rem_madnitude_difference: float = 1e-4
+    ):
+        # TODO: find a more efficient way of merging the vector spaces
+        fact = {"dtype": basis0.dtype, "device": basis0.device}
+        # ASSUMPTION: basis1 = a, basis0 == b,  target -> basis0
+        # assume that they are both orthonormal bases
+        # NOTE: both are assumed to be column-vectors (output of QR and SVD)
+        # idea: decompose the vectors to the parallel and perp components
+        # parallel component == ((a dot b) / (b dot b)) * b
+        #       b dot b == 1 -> orthonormal
+        # parallel component == (a dot b) * b
+
+        # TODO: determine if the values in the adjusted S should be along the diagonal, or should
+        #   i represent some mixing? (this would be putting values on the off-diagonal)
+        #       Lets start with the simple case of just doing the diagonal first
+
+        # 1. get parallel component with same order of vector (1 with 1, 2 with 2, etc)
+        # 2. use these to scale the s values for the average???
+        #   QUESTION: should the values be added to the target basis? it would make it not
+        #   normalized...
+        # 3. get the perpendicular components of the vectors from step 1
+        # 4. get the parallel components of these vectors with the other vectors (1 with 2/3, etc)
+        # 5. find how much of the remaining S value is for that vector
+        # 6. if there is anything remaining in S, append the independent vector and append the
+        #       rest of S to the end of the S0, sorting is unimportant!
+        # 7. sum both S mats and divide by 2 (average)
+        
+        # TODO: make sure that the vectors are linearly independent at the end 
+
+        # step 1: get parallel components ------------------- ( matmul )
+        parallel_mags = basis1.T @ basis0  # the rows of this matrix are the dot products
+        # can use the diagonal elements to get the magnitude of the diagonal components
+        comp_same_idx = torch.diag(parallel_mags, **fact)
+        # parallel components are on the diagonal
+        par_components = comp_same_idx * basis0
+
+        # 2. scale S values ---------------------------------
+        # have all the scaling for the S values already (sum for parallel_mags)
+        # reminder: s0 are the target s-vals, s1 is where we start because those are the
+        #   magnitudes of basis1's vectors
+        new_s1 = s1.clone() * torch.sum(parallel_mags, dim=0)
+        # num S values should == num vecs in basis
+
+        # 3. get perpendicular comps ------------------------
+        # can use the parallel_mags, but these magnitudes are of what is left!
+        perp_components = basis1 - par_components  # this is mostly for the magnitudes
+        # need to go through all the other vectors and grab everything above a certain level
+        remaining_mags = torch.sqrt(1 - torch.pow(comp_same_idx, 2))
+        # TODO: doulbe check that this is the same as `linalg.norm(perp_components, dim=0)`
+        #   also, not sure which is more efficient...
+        parallel_mags.fill_diagonal_(0)
+        removed_cols = torch.zeros(s1.shape, device=s1.device, dtype=torch.bool)
+
+        # todo: only compare up to max_vectors!
+        for cvec in range(basis0.shape[1]):
+            # objective of this loop is to get the remaining vectors
+
+            # get parallel components, then perpendicular comps
+            lp_par_comps = parallel_mags[:, cvec] * perp_components
+            perp_components = perp_components - lp_par_comps
+            # need to get the new magnitudes of the remaining components:
+            remaining_mags -= linalg.norm(perp_components, dim=0)
+            # TODO: should S be updated within the loop of outside of it?
+            #   -> S is updated previously, this SHOULDN'T do anything new, it should just remove
+            #       the parts of the perp_components which are pointing in the same direction
+            #       but if there is no more magnitude remaining, it can be dropped
+            removed_cols[remaining_mags <= rem_madnitude_difference] = True
+            remaining_mags[removed_cols] *= 0
+            # set that aspect of perp_components to 0
+            perp_components[:, removed_cols] *= 0
+            # if the remaining magnitude for anything hits 0, set the para
+        # get the rest of perp_components which are non-zero
+        remaining_vectors = perp_components[:, ~removed_cols]
+        if remaining_vectors.shape[1] > max_vectors:
+            remaining_vectors = remaining_vectors[: max_vectors]
+        # join the outputs into a single basis (should be mostly linearly independent)
+        out_basis = torch.cat([basis0, remaining_vectors], dim=1)
+
+        # need to get the magnitude of these
+        #   S-values should be their magnitude times the original S value
+        remaining_s_values = s1[~removed_cols] * linalg.norm(remaining_vectors, dim=0)
+        new_s1 = torch.cat([new_s1, remaining_s_values])
+        # average s matrices
+        new_s1[:s0.shape[0]] += s0  # the rest of the s0 values are 0
+        new_s1 /= 2.
+        return out_basis, new_s1
 
 
 class ProjectWeightsHoldQ:
@@ -359,8 +449,9 @@ class ProjectWeightsQR:
             self.param_buffers[n] = {}
             self.param_buffers[n]["q"] = None
             self.param_buffers[n]["r"] = None
+            self.param_buffers[n]["lpweights"] = None
 
-        method_options = ["avg_q_avg_qr", "vecnorm", "project_rank0"]
+        method_options = ["avg_q_avg_qr", "vecnorm", "wahba"]
         if method not in method_options:
             raise ValueError(f"method ({method}) must be one of {method_options}")
         self.project_method = method
@@ -369,6 +460,78 @@ class ProjectWeightsQR:
     def _iterate_param_buffers(self, skip_send=False):
         # TODO: abstract iterator??
         pass
+
+    @torch.no_grad()
+    def wahba_rotation(self, sync_level: str | None = None, qr_mode: str = "reduced") -> None:
+        # merging based on the Wahba rotation matrix
+        # 0: bcast the lpweights from rank0
+        # 1: (2 ideas both use mean of dim=0)
+        #   a: find the centroids of the points local to that process
+        #   b: find the centroids of points on all processes
+        # 2: find H -> H = (A - centroidsA) @ (B - centroidsB).T
+        # 3: u, s, vh = svd(H)
+        # 4: R = v.T @ u.T
+        # 5: skipping translate step
+
+        if sync_level is None:
+            sync_level = "all"
+
+        case = 1  # case for step 1
+
+        waits = []
+        wait2 = {}
+        for n, p in self.network.named_parameters():
+            if not p.requires_grad:
+                continue
+            if p.ndim == 1:
+                waits.append(dist.all_reduce(p.data, dist.ReduceOp.AVG, async_op=True))
+                continue
+            if sync_level == "1d":
+                continue
+
+            lpweights, shp = self._get_weight_shape(param=p)
+            if lpweights.shape[0] >= lpweights.shape[1]:  # already TS of similar
+                lpweights = lpweights.T  # .contiguous())
+
+            if self.param_buffers[n]["lpweights"] is None:
+                self.param_buffers[n]["lpweights"] = lpweights.contiguous()
+            else:
+                self.param_buffers[n]["lpweights"].zero_()
+                self.param_buffers[n]["lpweights"].add_(lpweights)
+
+            if self.rank != 0:
+                self.param_buffers[n]["lpweights"].zero_()
+
+            # step 0 - bcast lpweights (nonblocking)
+            dist.broadcast(self.param_buffers[n]["lpweights"], src=0, async_op=False)
+            # FIXME: skipping the overlap for now, can optimize after its working
+
+            if self.rank != 0:  # don't need to do anything on rank 0 as it is not rotated
+                # step1:
+                if case == 1:
+                    loc_mean = lpweights.mean(0)
+                    rank0 = self.param_buffers[n]["lpweights"]
+                    # h = (loc - mean_loc) @ (rank0 - mean_0).T
+                    h = (lpweights - loc_mean) @ (rank0 - rank0.mean(0)).T
+                    u, s, vh = torch.linalg.svd(h, full_matrices=True)
+                    r = vh.T @ u.T
+                    lpweights = r @ lpweights
+
+            # new = lpweights.contiguous()
+            # dist.all_reduce(new, op=dist.ReduceOp.AVG)
+            # print(lpweights, shp, )
+            if lpweights.shape[0] >= lpweights.shape[1]:  # already TS of similar
+                # NOTE: this will take more time!
+                p.data.set_(lpweights.T.reshape(shp))  # .contiguous())
+            else:
+                p.data.set_(lpweights.reshape(shp))  # .contiguous())
+
+            if sync_level == "all":
+                p.data.set_(p.data.contiguous())
+                waits.append(dist.all_reduce(p.data, dist.ReduceOp.AVG, async_op=True))
+
+        for w in waits:
+            w.wait()
 
     @torch.no_grad()
     def _set_qr_dict(self, name, q, r):
@@ -435,7 +598,7 @@ class ProjectWeightsQR:
 
             wait2[n] = dist.all_reduce(
                 self.param_buffers[n]["q"],
-                dist.ReduceOp.SUM,
+                dist.ReduceOp.AVG,
                 async_op=True,
             )
 
@@ -620,6 +783,8 @@ class ProjectWeightsQR:
             return self.sum_vecnorm_merge(sync_level=sync_level, qr_mode=qr_mode)
         elif self.project_method == "avg_q_avg_qr":
             return self.avg_q_avg_qr(sync_level=sync_level, qr_mode=qr_mode)
+        elif self.project_method == "wahba":
+            return self.wahba_rotation(sync_level=sync_level, qr_mode=qr_mode)
 
 
 @torch.no_grad()

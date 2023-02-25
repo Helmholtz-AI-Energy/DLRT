@@ -8,7 +8,6 @@ import time
 from enum import Enum
 from pathlib import Path
 
-import comm
 import mlflow.pytorch
 import pandas as pd
 import pytorch_warmup as warmup
@@ -36,9 +35,10 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
 
 import dlrt
-from .. import datasets as dsets
-from .. import mlflow_utils as mlfutils
-from .. import optimizer as opt
+from networks import comm
+from networks import datasets as dsets
+from networks import mlflow_utils as mlfutils
+from networks import optimizer as opt
 
 # import cProfile, pstats, io
 # from pstats import SortKey
@@ -233,7 +233,7 @@ def main(config):  # noqa: C901
         train_loss = train(
             train_loader,
             optimizer,
-            ddpmodel,
+            model,
             criterion,
             epoch,
             device,
@@ -241,6 +241,7 @@ def main(config):  # noqa: C901
             warmup_scheduler=warmup_scheduler,
             projector=projector,
             lr_schedule=scheduler,
+            ddpmodel=ddpmodel
         )
         # else:
         # # with model.no_sync():
@@ -305,6 +306,7 @@ def train(
     warmup_scheduler,
     projector: ProjectWeightsQR,
     lr_schedule,
+    ddpmodel,
 ):
     batch_time = AverageMeter("Time", ":6.3f")
     data_time = AverageMeter("Data", ":6.3f")
@@ -321,6 +323,12 @@ def train(
     model.train()
     # rank = dist.get_rank()
     end = time.time()
+    end_sync = True
+    if config["qr_sync_frequency"] == "epoch":
+        sync_mod = -1
+    else:
+        sync_mod = config["qr_sync_frequency"]
+
     for i, (images, target) in enumerate(train_loader):
         # if dist.get_rank() == 0:
         #     print("step", i)
@@ -331,15 +339,19 @@ def train(
         # move data to the same device as model
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
-        output = model(images)
+        if i % sync_mod < sync_mod // 2:
+            output = ddpmodel(images)
+        else:
+            output = model(images)
         loss = criterion(output, target)
         loss.backward()
 
         optimizer.step()
 
         # if epoch < 5 or i == len(train_loader) - 1:
-        # if i == len(train_loader) - 1:
-        projector.project_weights(sync_level="all", qr_mode=config["qr_mode"])
+        # if i == :
+        if (end_sync and i == len(train_loader) - 1) or i % sync_mod == sync_mod - 1:
+            projector.project_weights(sync_level="all", qr_mode=config["qr_mode"])
         # elif i % 2 == 0:
         #     projector.project_weights(sync_level="q")
         # else:
@@ -684,13 +696,14 @@ if __name__ == "__main__":
 
     rank = MPI.COMM_WORLD.Get_rank()
     if rank == 0:
-        experiment = mlfutils.setup_mlflow(config, verbose=False)
+        experiment = mlfutils.setup_mlflow(config, verbose=False, rank=rank)
+        rprint(config)
 
         # run_id -> adaptive needs to be unique, roll random int?
         # run_name = f"" f"full-rank-everybatch-{os.environ['SLURM_JOBID']}"
         with mlflow.start_run() as run:
             mlflow.log_param("Slurm jobid", os.environ["SLURM_JOBID"])
-            run_name = f"{config['run_name']}" + run.info.run_name
+            run_name = f"{config['run_name']}-" + run.info.run_name
             # run_name = f"baseline-cifar100-ws-{config['world_size']}"
             mlflow.set_tag("mlflow.runName", run_name)
             # mlflow.get_tag()
@@ -698,6 +711,6 @@ if __name__ == "__main__":
             print("tracking uri:", mlflow.get_tracking_uri())
             print("artifact uri:", mlflow.get_artifact_uri())
             main(config)
-            exit(0)
+            # exit(0)
     else:
         main(config)

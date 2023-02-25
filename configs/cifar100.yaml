@@ -17,26 +17,32 @@ resume: null  # path to latest checkpoint (default: none)
 evaluate: False
 pretrained: False
 seed: 42
+run_name: ddphalf-vn-avg
+qr_mode: reduced
+qr_merge_method: vecnorm
+qr_sync_frequency: 20
+
 # network
+#arch: efficientnet_v2_s
 arch: resnet50
 mixed: False
-local_batch_size: 64  # 512 -> OOM error
+local_batch_size: 256  # 512 -> OOM error
 # learning rate
-learning_rate: 0.1
+learning_rate: 0.5
 label_smoothing: 0.1
 qr_warmup: -1
 lr_schedule:
 #  name: ExponentialLR
 #  params:
 #    gamma: 0.95
-#  name: StepLR
-#  params:
-#    step_size: 40
-#    gamma: 0.1
-  name: CosineAnnealingWarmRestarts
+  name: StepLR
   params:
-    eta_min: 0
-    T_mult: 1  # only for warm restarts
+    step_size: 125
+    gamma: 0.1
+#  name: CosineAnnealingWarmRestarts
+#  params:
+#    eta_min: 0
+#    T_mult: 1  # only for warm restarts
 #  name: CyclicLR
 #  params:
 #    base_lr: 0.001
@@ -47,7 +53,7 @@ lr_schedule:
 lr_warmup:
   name: LinearWarmup
   params:
-    warmup_period: 1  # on cifar100 with 256/8 procs == 5 warmup epochs
+    warmup_period: 500  # ??? on cifar100 with 256/8 procs == 5 warmup epochs
 # optimizer
 optimizer:
 #  name: Adam

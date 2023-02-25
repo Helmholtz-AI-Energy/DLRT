@@ -21,7 +21,7 @@ def print0(*args, sep=" ", end="\n", file=None):
         print(*args, sep=sep, end=end, file=file)
 
 
-def setup_mlflow(config: dict, verbose: bool = False) -> Experiment | None:
+def setup_mlflow(config: dict, verbose: bool = False, rank: int = None) -> Experiment | None:
     """Setup MLFlow server, connect to it, and set the experiment
 
     Parameters
@@ -30,11 +30,16 @@ def setup_mlflow(config: dict, verbose: bool = False) -> Experiment | None:
         Config dictionary
     verbose: bool
         if this should print the mlflow server on rank0
+    rank: int, optional
+        process rank
 
     exp_id: int
         MLFlow experiment ID
     """
-    if dist.get_rank() != 0:
+    if rank is not None:
+        if dist.is_initialized() and dist.get_rank() != 0:
+            return
+    if rank != 0:
         return
     restart_mlflow_server(config)
     # Connect to the MLFlow client for tracking this training - only on rank0!
@@ -43,7 +48,7 @@ def setup_mlflow(config: dict, verbose: bool = False) -> Experiment | None:
     if verbose:
         print0(f"MLFlow connected to server {mlflow_server}")
 
-    experiment = mlflow.set_experiment(config["arch"])
+    experiment = mlflow.set_experiment(f"{config['dataset']}-{config['arch']}")
     return experiment
 
 
