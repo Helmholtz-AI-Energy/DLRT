@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from networks import comm
-from networks import datasets as dsets
 import mlflow.pytorch
 import pytorch_warmup as warmup
 import torch.backends.cudnn as cudnn
@@ -22,6 +20,8 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import Subset
 
 import dlrt
+from networks import comm
+from networks import datasets as dsets
 
 # import cProfile, pstats, io
 # from pstats import SortKey

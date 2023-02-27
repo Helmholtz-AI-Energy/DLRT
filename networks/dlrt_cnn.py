@@ -7,8 +7,6 @@ import shutil
 import time
 from enum import Enum
 
-from network import comm
-from network import datasets as dsets
 import mlflow.pytorch
 import network.mlflow_utils as mlfutils
 import optimizer as opt
@@ -23,6 +21,8 @@ import torch.utils.data.distributed
 import torchvision.models as models
 import yaml
 from mpi4py import MPI
+from network import comm
+from network import datasets as dsets
 from PIL import ImageFile
 from rich import print as rprint
 from rich.columns import Columns

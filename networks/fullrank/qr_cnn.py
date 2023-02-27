@@ -24,6 +24,7 @@ from compare_basis import CompareQR
 from compare_basis import QRProjectWeights
 from mpi4py import MPI
 from PIL import ImageFile
+from projecting import ProjectSVD
 from projecting import ProjectWeightsHoldQ
 from projecting import ProjectWeightsQR
 from rich import print as rprint
@@ -216,7 +217,8 @@ def main(config):  # noqa: C901
     # comp1 = CompareQR(network=model, mode='first')
     # compprev = CompareQR(network=model, mode='1previous')
     # model.register_comm_hook(state=None, hook=project_bucket)
-    projector = ProjectWeightsQR(network=model, method=config["qr_merge_method"])
+    # projector = ProjectWeightsQR(network=model, method=config["qr_merge_method"])
+    projector = ProjectSVD(network=model)
     # projector = ProjectWeightsHoldQ(network=model)
     for epoch in range(config["start_epoch"], config["epochs"]):
         if config["rank"] == 0:
@@ -241,7 +243,7 @@ def main(config):  # noqa: C901
             warmup_scheduler=warmup_scheduler,
             projector=projector,
             lr_schedule=scheduler,
-            ddpmodel=ddpmodel
+            ddpmodel=ddpmodel,
         )
         # else:
         # # with model.no_sync():
@@ -351,7 +353,7 @@ def train(
         # if epoch < 5 or i == len(train_loader) - 1:
         # if i == :
         if (end_sync and i == len(train_loader) - 1) or i % sync_mod == sync_mod - 1:
-            projector.project_weights(sync_level="all", qr_mode=config["qr_mode"])
+            projector.project_weights(sync_level="all")
         # elif i % 2 == 0:
         #     projector.project_weights(sync_level="q")
         # else:

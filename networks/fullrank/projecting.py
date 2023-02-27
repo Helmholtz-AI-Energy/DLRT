@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from typing import Tuple
 
 import torch
 import torch.distributed as dist
@@ -10,97 +11,357 @@ from torch import linalg
 
 
 class ProjectSVD:
-    def __init__(self, network):
+    def __init__(self, network, max_vectors=None, min_s=1e-4):
         self.network = network
+        self.max_vectors = max_vectors
+        self.min_s = min_s
+        self.param_buffers = {}
+        for n, p in self.network.named_parameters():
+            if not p.requires_grad or p.ndim == 1:
+                continue
+
+            # original plan was to average q then do the mult,
+            # new plan is to average r, then do mult, then do average
+            self.param_buffers[n] = {}
+            self.param_buffers[n]["lpweights"] = None
+
+    # @torch.no_grad()
+    # def _project_vectors(
+    #     self,
+    #     basis0,
+    #     basis1,
+    #     s0,
+    #     s1,
+    #     max_vectors,
+    #     rem_madnitude_difference: float = 1e-4,
+    # ):
+    #     # TODO: find a more efficient way of merging the vector spaces
+    #     fact = {"dtype": basis0.dtype, "device": basis0.device}
+    #     # ASSUMPTION: basis1 = a, basis0 == b,  target -> basis0
+    #     # assume that they are both orthonormal bases
+    #     # NOTE: both are assumed to be column-vectors (output of QR and SVD)
+    #     # idea: decompose the vectors to the parallel and perp components
+    #     # parallel component == ((a dot b) / (b dot b)) * b
+    #     #       b dot b == 1 -> orthonormal
+    #     # parallel component == (a dot b) * b
+    #
+    #     # TODO: determine if the values in the adjusted S should be along the diagonal, or should
+    #     #   i represent some mixing? (this would be putting values on the off-diagonal)
+    #     #       Lets start with the simple case of just doing the diagonal first
+    #
+    #     # 1. get parallel component with same order of vector (1 with 1, 2 with 2, etc)
+    #     # 2. use these to scale the s values for the average???
+    #     #   QUESTION: should the values be added to the target basis? it would make it not
+    #     #   normalized...
+    #     # 3. get the perpendicular components of the vectors from step 1
+    #     # 4. get the parallel components of these vectors with the other vectors (1 with 2/3, etc)
+    #     # 5. find how much of the remaining S value is for that vector
+    #     # 6. if there is anything remaining in S, append the independent vector and append the
+    #     #       rest of S to the end of the S0, sorting is unimportant!
+    #     # 7. sum both S mats and divide by 2 (average)
+    #
+    #     # TODO: make sure that the vectors are linearly independent at the end
+    #
+    #     # step 1: get parallel components ------------------- ( matmul )
+    #     parallel_mags = basis1.T @ basis0  # the rows of this matrix are the dot products
+    #     # can use the diagonal elements to get the magnitude of the diagonal components
+    #     comp_same_idx = torch.diag(parallel_mags)
+    #     # parallel components are on the diagonal
+    #     par_components = comp_same_idx * basis0
+    #
+    #     # 2. scale S values ---------------------------------
+    #     # have all the scaling for the S values already (sum for parallel_mags)
+    #     # reminder: s0 are the target s-vals, s1 is where we start because those are the
+    #     #   magnitudes of basis1's vectors
+    #     new_s1 = s1.clone() * torch.sum(parallel_mags, dim=0)
+    #     # num S values should == num vecs in basis
+    #
+    #     # 3. get perpendicular comps ------------------------
+    #     # can use the parallel_mags, but these magnitudes are of what is left!
+    #     perp_components = basis1 - par_components  # this is mostly for the magnitudes
+    #     # need to go through all the other vectors and grab everything above a certain level
+    #     remaining_mags = torch.sqrt(1 - torch.pow(comp_same_idx, 2))
+    #     # TODO: doulbe check that this is the same as `linalg.norm(perp_components, dim=0)`
+    #     #   also, not sure which is more efficient...
+    #
+    #     # NEW IDEA: use householder transforms to make everything orthogonal
+    #
+    #     parallel_mags.fill_diagonal_(0)
+    #     removed_cols = torch.zeros(s1.shape, device=s1.device, dtype=torch.bool)
+    #
+    #     # todo: only compare up to max_vectors!
+    #     # print(remaining_mags)
+    #     for cvec in range(basis0.shape[1]):
+    #         # objective of this loop is to get the remaining vectors
+    #         # print(cvec)
+    #         # get parallel components, then perpendicular comps
+    #         lp_par_comps = parallel_mags[:, cvec] * perp_components
+    #         # print(perp_components)
+    #         # print(lp_par_comps)
+    #         perp_components = perp_components - lp_par_comps
+    #         # need to get the new magnitudes of the remaining components:
+    #         # print(cvec, remaining_mags, linalg.norm(lp_par_comps, dim=0))
+    #         remaining_mags -= linalg.norm(lp_par_comps, dim=0)
+    #         # TODO: should S be updated within the loop of outside of it?
+    #         #   -> S is updated previously, this SHOULDN'T do anything new, it should just remove
+    #         #       the parts of the perp_components which are pointing in the same direction
+    #         #       but if there is no more magnitude remaining, it can be dropped
+    #         removed_cols[remaining_mags <= rem_madnitude_difference] = True
+    #         # remaining_mags[removed_cols] *= 0
+    #         # set that aspect of perp_components to 0
+    #         # perp_components[:, removed_cols] *= 0
+    #         # if the remaining magnitude for anything hits 0, set the para
+    #
+    #     # # TODO: the squeeze might be an issue
+    #     # removed_inds = torch.nonzero(removed_cols, as_tuple=False)
+    #     # # print(remaining_mags, removed_cols, removed_inds)
+    #     remaining_vectors = perp_components[:, ~removed_cols]
+    #
+    #     # if remaining_vectors.shape[1] > max_vectors:
+    #     #     remaining_vectors = remaining_vectors[: max_vectors]
+    #     # # Now, need to compare the perpendicular components to each other???? can happen during
+    #     # #   the projection
+    #     # # However, this time, the length of the vectors is not 1, need to do.....MATH
+    #     #
+    #     # # FIXME: something is still broken in here somewhere, im not sure what it is
+    #     # #   the matrices should be linear independent but they are not.
+    #     # #   maybe it has something to do with the abstraction to matrices?
+    #     #
+    #     # # need to get the magnitude of these
+    #     # #   S-values should be their magnitude times the original S value
+    #     # remaining_s_values = s1[~removed_cols] * linalg.norm(remaining_vectors, dim=0)
+    #     # new_s1 = torch.cat([new_s1, remaining_s_values])
+    #     # # average s matrices
+    #     # new_s1[:s0.shape[0]] += s0  # the rest of the s0 values are 0
+    #     # new_s1 /= 2.
+    #
+    #     # get the rest of perp_components which are non-zero
+    #     # need to normalize the remaining vectors
+    #     # remaining_vectors = F.normalize(remaining_vectors, dim=0)
+    #     # join the outputs into a single basis (should be mostly linearly independent)
+    #     out_basis = torch.cat([basis0, remaining_vectors], dim=1)
+    #     return out_basis, new_s1
 
     @torch.no_grad()
-    def _project_vectors(
-            self, basis0, basis1, s0, s1, max_vectors, rem_madnitude_difference: float = 1e-4
+    def _project_vectors_qr(
+        self,
+        u0,
+        s0,
+        vh0,
+        u1,
+        s1,
+        vh1,
+        max_vectors: int = -1,
+        min_s: float = 1e-4,
     ):
-        # TODO: find a more efficient way of merging the vector spaces
-        fact = {"dtype": basis0.dtype, "device": basis0.device}
-        # ASSUMPTION: basis1 = a, basis0 == b,  target -> basis0
-        # assume that they are both orthonormal bases
-        # NOTE: both are assumed to be column-vectors (output of QR and SVD)
-        # idea: decompose the vectors to the parallel and perp components
-        # parallel component == ((a dot b) / (b dot b)) * b
-        #       b dot b == 1 -> orthonormal
-        # parallel component == (a dot b) * b
+        # merge the orthogonal vectors using QR then cutting off the remainder (if more than curoff)
 
-        # TODO: determine if the values in the adjusted S should be along the diagonal, or should
-        #   i represent some mixing? (this would be putting values on the off-diagonal)
-        #       Lets start with the simple case of just doing the diagonal first
+        # cut off last vectors (max_vectors) and values
+        v0, v1 = vh0.T, vh1.T
+        if max_vectors == -1:
+            max_vectors = int(u0.shape[1] * 1.5)
 
-        # 1. get parallel component with same order of vector (1 with 1, 2 with 2, etc)
-        # 2. use these to scale the s values for the average???
-        #   QUESTION: should the values be added to the target basis? it would make it not
-        #   normalized...
-        # 3. get the perpendicular components of the vectors from step 1
-        # 4. get the parallel components of these vectors with the other vectors (1 with 2/3, etc)
-        # 5. find how much of the remaining S value is for that vector
-        # 6. if there is anything remaining in S, append the independent vector and append the
-        #       rest of S to the end of the S0, sorting is unimportant!
-        # 7. sum both S mats and divide by 2 (average)
-        
-        # TODO: make sure that the vectors are linearly independent at the end 
+        # TODO: should the max vectors be here or below??
+        # if max_vectors > 0:
+        #     u0, u1 = u0[:, :max_vectors], u1[:, :max_vectors]
+        #     s0, s1 = s0[:max_vectors], s1[:max_vectors]
+        #     v0, v1 = v0[:, :max_vectors], v1[:, :max_vectors]
 
-        # step 1: get parallel components ------------------- ( matmul )
-        parallel_mags = basis1.T @ basis0  # the rows of this matrix are the dot products
-        # can use the diagonal elements to get the magnitude of the diagonal components
-        comp_same_idx = torch.diag(parallel_mags, **fact)
-        # parallel components are on the diagonal
-        par_components = comp_same_idx * basis0
+        # cat u's together on dim1
+        ucat = torch.cat([u0, u1], dim=1)
+        scat = torch.cat([s0, s1])
+        vcat = torch.cat([v0, v1], dim=1)
+        # do qr
+        qu, ru = torch.linalg.qr(ucat, mode="reduced")
+        qv, rv = torch.linalg.qr(vcat, mode="reduced")
+        # multiply R by the cat of s
+        # TODO: double check this math, should still be a vector, but still
+        s = ru @ scat @ rv.T / 2.0
+        # TODO: should this be abs or not?
+        #   also, what hsould min_s be?
+        to_keep = torch.abs(s) >= min_s
+        s = s[to_keep]
+        u = qu[:, to_keep]
+        # sr = rv[to_keep, to_keep].T
+        vh = qv[:, to_keep].T
 
-        # 2. scale S values ---------------------------------
-        # have all the scaling for the S values already (sum for parallel_mags)
-        # reminder: s0 are the target s-vals, s1 is where we start because those are the
-        #   magnitudes of basis1's vectors
-        new_s1 = s1.clone() * torch.sum(parallel_mags, dim=0)
-        # num S values should == num vecs in basis
+        if max_vectors > 0:
+            u = u[:, :max_vectors]
+            s = s[:max_vectors]
+            vh = vh[:max_vectors]
+        return u, s, vh
 
-        # 3. get perpendicular comps ------------------------
-        # can use the parallel_mags, but these magnitudes are of what is left!
-        perp_components = basis1 - par_components  # this is mostly for the magnitudes
-        # need to go through all the other vectors and grab everything above a certain level
-        remaining_mags = torch.sqrt(1 - torch.pow(comp_same_idx, 2))
-        # TODO: doulbe check that this is the same as `linalg.norm(perp_components, dim=0)`
-        #   also, not sure which is more efficient...
-        parallel_mags.fill_diagonal_(0)
-        removed_cols = torch.zeros(s1.shape, device=s1.device, dtype=torch.bool)
+    @staticmethod
+    def _get_sizes(u: torch.Tensor, s: torch.Tensor, vh: torch.Tensor) -> torch.Tensor:
+        sizes = torch.zeros(5, device=u.device, dtype=torch.int32)
+        # factory = {"device": u.device, "dtype": u.dtype}
+        sizes[0] = u.shape[0]
+        sizes[1] = u.shape[1]
+        sizes[2] = s.shape[0]
+        sizes[3] = vh.shape[0]
+        sizes[4] = vh.shape[1]
+        # buffu = torch.empty(u.shape, **factory)
+        return sizes
 
-        # todo: only compare up to max_vectors!
-        for cvec in range(basis0.shape[1]):
-            # objective of this loop is to get the remaining vectors
+    @torch.no_grad()
+    def _get_weight_shape(self, param):
+        weights = param.data
+        shp = weights.shape
 
-            # get parallel components, then perpendicular comps
-            lp_par_comps = parallel_mags[:, cvec] * perp_components
-            perp_components = perp_components - lp_par_comps
-            # need to get the new magnitudes of the remaining components:
-            remaining_mags -= linalg.norm(perp_components, dim=0)
-            # TODO: should S be updated within the loop of outside of it?
-            #   -> S is updated previously, this SHOULDN'T do anything new, it should just remove
-            #       the parts of the perp_components which are pointing in the same direction
-            #       but if there is no more magnitude remaining, it can be dropped
-            removed_cols[remaining_mags <= rem_madnitude_difference] = True
-            remaining_mags[removed_cols] *= 0
-            # set that aspect of perp_components to 0
-            perp_components[:, removed_cols] *= 0
-            # if the remaining magnitude for anything hits 0, set the para
-        # get the rest of perp_components which are non-zero
-        remaining_vectors = perp_components[:, ~removed_cols]
-        if remaining_vectors.shape[1] > max_vectors:
-            remaining_vectors = remaining_vectors[: max_vectors]
-        # join the outputs into a single basis (should be mostly linearly independent)
-        out_basis = torch.cat([basis0, remaining_vectors], dim=1)
+        if weights.ndim > 2:
+            lpweights = weights.view(weights.shape[0], -1)
+        else:
+            lpweights = weights
+        return lpweights, shp
 
-        # need to get the magnitude of these
-        #   S-values should be their magnitude times the original S value
-        remaining_s_values = s1[~removed_cols] * linalg.norm(remaining_vectors, dim=0)
-        new_s1 = torch.cat([new_s1, remaining_s_values])
-        # average s matrices
-        new_s1[:s0.shape[0]] += s0  # the rest of the s0 values are 0
-        new_s1 /= 2.
-        return out_basis, new_s1
+    @torch.no_grad()
+    def merge_svd(
+        self,
+        weights,
+        max_vectors=-1,
+        min_s: float = 1e-4,
+    ) -> tuple[dist.Work, torch.Tensor]:
+        # todo: make a tree merge pattern to merge all of the SVD stuff
+        trans = False
+        if weights.shape[0] < weights.shape[1]:
+            weights = weights.T
+            trans = True
+        locu, locs, locvh = torch.linalg.svd(weights, full_matrices=False)
+        sizes = self._get_sizes(locu, locs, locvh)
+        factory = {"device": weights.device, "dtype": weights.dtype}
+        buffu = torch.empty(sizes[:2], **factory)
+        buffs = torch.empty(sizes[2], **factory)
+        buffvh = torch.empty(sizes[3:], **factory)
+        if max_vectors > 0:
+            locu = locu[:, :max_vectors].contiguous()
+            locs = locs[:max_vectors].contiguous()
+            locvh = locvh[:max_vectors].contiguous()
+
+            buffu = buffu[:, :max_vectors].contiguous()
+            buffs = buffs[:max_vectors].contiguous()
+            buffvh = buffvh[:max_vectors].contiguous()
+        rank, size = dist.get_rank(), dist.get_world_size()
+        # tree merge
+
+        tree_width = size
+        update_sizes = False
+        while True:
+            # todo: create new buffers each loop, the number of vecs may change...
+            rem = int(tree_width % 2)
+            cutoff = tree_width // 2
+            # if rank >= cutoff:  # send
+            # start at end of ranks (ws: 9 - start with 1-9 and leave rank 0)
+            if rank < rem:
+                tree_width -= cutoff
+                # if tree_width <= 0:
+                #     # should never happen in this loop, rems should always be touched
+                #     break
+                print(f"rank {rank} skipping, tree width: {tree_width}, rem: {rem}")
+                continue
+            if rank >= tree_width:
+                # todo: make sure that this is okay
+                print(f"rank {rank} breaking, tree width: {tree_width}, rem: {rem}")
+                break
+            target = rem + (rank % cutoff)  # should work on everything unless there is a remainder
+            recv = rank <= cutoff
+            send = rank > cutoff
+            if send:
+                print(f"rank {rank} merging, tree width: {tree_width}, rem: {rem}, pair: {target}")
+                waitu = dist.isend(locu, dst=target, tag=0)
+                waits = dist.isend(locs, dst=target, tag=1)
+                waitvh = dist.isend(locvh, dst=target, tag=2)
+                if update_sizes:
+                    sizes = self._get_sizes(u=locu, s=locs, vh=locvh)
+                    dist.send(sizes, dst=target, tag=3)
+            else:  # if recv:
+                print(
+                    f"rank {rank} merging, tree width: {tree_width}, rem: {rem}, pair: {rank + cutoff}",
+                )
+                if update_sizes:
+                    sizes.zero_()
+                    dist.recv(sizes, src=rank + cutoff, tag=3)
+                    buffu = torch.empty(sizes[:2], **factory)
+                    buffs = torch.empty(sizes[2], **factory)
+                    buffvh = torch.empty(sizes[3:], **factory)
+                waitu = dist.irecv(buffu, src=rank + cutoff, tag=0)
+                waits = dist.irecv(buffs, src=rank + cutoff, tag=1)
+                waitvh = dist.irecv(buffvh, src=rank + cutoff, tag=2)
+
+            waitu.wait()
+            waits.wait()
+            waitvh.wait()
+            if send:
+                # break off the other ranks which are not used anymore
+                break
+
+            # have the buffers on the recv ranks
+            if recv:
+                locu, locs, locvh = self._project_vectors(
+                    u0=locu,
+                    s0=locs,
+                    vh0=locvh,
+                    u1=buffu,
+                    s1=buffs,
+                    vh1=buffvh,
+                    max_vectors=max_vectors,
+                    min_s=min_s,
+                )
+                update_sizes = True
+
+            tree_width -= cutoff
+            if tree_width <= 1:
+                break
+
+        # TODO: remove me! DEBUG only
+        dist.barrier()
+
+        # TODO: reduce memory hit??
+        new_weights = torch.linalg.multi_dot(locu, torch.diag(locs), locvh)
+        weights = new_weights.T if trans else new_weights
+
+        if rank != 0:
+            weights *= 0
+        # send the updated weights to all ranks (can be nonblocking)
+        weights_wait = dist.broadcast(weights, src=0, async_op=True)
+
+        return weights_wait, weights
+
+    @torch.no_grad()
+    def merge_weights(self, sync_level="all"):
+        waits = []
+        wait2 = {}
+        for n, p in self.network.named_parameters():
+            if not p.requires_grad:
+                continue
+            if p.ndim == 1:
+                waits.append(dist.all_reduce(p.data, dist.ReduceOp.AVG, async_op=True))
+                continue
+            if sync_level == "1d":
+                continue
+
+            # make weights 2D in the case that they are not
+            lpweights, shp = self._get_weight_shape(param=p)
+            if lpweights.shape[0] >= lpweights.shape[1]:  # already TS of similar
+                lpweights = lpweights.T  # .contiguous())
+
+            if self.param_buffers[n]["lpweights"] is None:
+                self.param_buffers[n]["lpweights"] = lpweights.contiguous()
+            else:
+                self.param_buffers[n]["lpweights"].zero_()
+                self.param_buffers[n]["lpweights"].add_(lpweights)
+
+            wait2[n] = self.merge_svd(
+                weights=self.param_buffers[n]["lpweights"],
+                max_vectors=self.max_vectors,
+                min_s=self.min_s,
+            )
+        for w in waits:
+            w.wait()
+        for key in wait2:
+            wait2[key][0].wait()
+        for n, p in self.network.named_parameters():
+            if n in wait2:
+                p.set_(wait2[n][1])
 
 
 class ProjectWeightsHoldQ:
@@ -479,7 +740,7 @@ class ProjectWeightsQR:
         case = 1  # case for step 1
 
         waits = []
-        wait2 = {}
+        # wait2 = {}
         for n, p in self.network.named_parameters():
             if not p.requires_grad:
                 continue
