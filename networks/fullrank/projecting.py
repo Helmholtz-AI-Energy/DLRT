@@ -7,8 +7,9 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-# import torch.functional.pad as pad
 from torch import linalg
+
+# import torch.functional.pad as pad
 
 
 class ProjectSVD:
@@ -145,15 +146,15 @@ class ProjectSVD:
 
     @torch.no_grad()
     def _project_vectors_qr_complete(
-            self,
-            u0,
-            s0,
-            vh0,
-            u1,
-            s1,
-            vh1,
-            max_vectors: int = -1,
-            min_s: float = 1e-4,
+        self,
+        u0,
+        s0,
+        vh0,
+        u1,
+        s1,
+        vh1,
+        max_vectors: int = -1,
+        min_s: float = 1e-4,
     ):
         # merge the orthogonal vectors using QR then cutting off the remainder (if more than curoff)
 
@@ -232,10 +233,14 @@ class ProjectSVD:
 
         # cat u's together on dim1
         ucat = torch.cat([u0, u1], dim=1)
-        scat = torch.zeros(s0.shape[0] + s1.shape[0], s0.shape[1] + s1.shape[1],
-            device=s0.device, dtype=s0.dtype)
-        scat[:s0.shape[0], :s0.shape[1]] = s0
-        scat[s1.shape[0]:, s1.shape[1]:] = s1
+        scat = torch.zeros(
+            s0.shape[0] + s1.shape[0],
+            s0.shape[1] + s1.shape[1],
+            device=s0.device,
+            dtype=s0.dtype,
+        )
+        scat[: s0.shape[0], : s0.shape[1]] = s0
+        scat[s1.shape[0] :, s1.shape[1] :] = s1
         # scat = torch.cat([s0, s1])
         vcat = torch.cat([v0, v1], dim=0)
         # Testing something: what if we ignored the order of the vectors for V and stacked them
@@ -386,7 +391,7 @@ class ProjectSVD:
             # have the buffers on the recv ranks
             if recv:
                 locu, locs, locvh = self._project_vectors_qr(
-                # locu, locs = self._project_vectors_qr_complete(
+                    # locu, locs = self._project_vectors_qr_complete(
                     u0=locu,
                     s0=locs,
                     vh0=locvh,
@@ -893,7 +898,10 @@ class ProjectWeightsQR:
 
     @torch.no_grad()
     def uber_sum_vecnorm_merge(
-        self, losses, sync_level: str | None = None, qr_mode: str = "reduced"
+        self,
+        losses,
+        sync_level: str | None = None,
+        qr_mode: str = "reduced",
     ) -> None:
         """
         use the uber gradient (the difference of the network from the last updat to now) and do
