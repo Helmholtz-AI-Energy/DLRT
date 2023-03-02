@@ -47,7 +47,7 @@ TOMOUNT+="/scratch,/tmp,/usr/bin/srun:/usr/bin/srun"
 TOMOUNT+="/hkfs/work/workspace/scratch/qv2382-dlrt/datasets"
 
 salloc --partition=accelerated \
-  -A haicore-project-scc \
+  -A hk-project-test-mlperf \
   -N "${SLURM_NNODES}" \
   --time "${TIMELIMIT}" \
   --gres gpu:"${GPUS_PER_NODE}" \

@@ -7,6 +7,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+# import torch.functional.pad as pad
 from torch import linalg
 
 
@@ -143,16 +144,16 @@ class ProjectSVD:
     #     return out_basis, new_s1
 
     @torch.no_grad()
-    def _project_vectors_qr(
-        self,
-        u0,
-        s0,
-        vh0,
-        u1,
-        s1,
-        vh1,
-        max_vectors: int = -1,
-        min_s: float = 1e-4,
+    def _project_vectors_qr_complete(
+            self,
+            u0,
+            s0,
+            vh0,
+            u1,
+            s1,
+            vh1,
+            max_vectors: int = -1,
+            min_s: float = 1e-4,
     ):
         # merge the orthogonal vectors using QR then cutting off the remainder (if more than curoff)
 
@@ -169,37 +170,110 @@ class ProjectSVD:
 
         # cat u's together on dim1
         ucat = torch.cat([u0, u1], dim=1)
-        scat = torch.cat([s0, s1])
-        vcat = torch.cat([v0, v1], dim=1)
+        combi_s = torch.cat([s0, s1], dim=0)
+        vcat = torch.cat([v0, v1], dim=0)
+        # vhcat = torch.cat([vh0, vh1], dim=0)  # now TS
+        # print(f"ucat: {ucat.shape}, scat: {scat.shape}, vcat: {vcat.shape}")
         # do qr
         qu, ru = torch.linalg.qr(ucat, mode="reduced")
+        # TODO: may need the complete verson of this QR
+        #       this is because before the cat, the V's are square
+        # since the cat makes the QR of the Vs equal to Q0 @ R_combi, we can just comute R
         qv, rv = torch.linalg.qr(vcat, mode="reduced")
         # multiply R by the cat of s
         # TODO: double check this math, should still be a vector, but still
-        s = ru @ scat @ rv.T / 2.0
-        # TODO: should this be abs or not?
-        #   also, what hsould min_s be?
-        to_keep = torch.abs(s) >= min_s
-        s = s[to_keep]
-        u = qu[:, to_keep]
-        # sr = rv[to_keep, to_keep].T
-        vh = qv[:, to_keep].T
+        # combi_s = torch.zeros(
+        #     s0.shape[0] + s1.shape[0], s0.shape[1] + s1.shape[1], device=s0.device, dtype=s1.dtype
+        # )
+        # combi_s[:s0.shape[0], :s0.shape[1]] = s0
+        # combi_s[s1.shape[0]:, s1.shape[1]:] = s0
 
+        # print(ru.shape, combi_s.shape, rv.T.shape)
+        # if ru.shape[1] > combi_s.shape[0]:
+        #     diff = ru.shape[1] - combi_s.shape[0]
+        #     combi_s = F.pad(combi_s, (0, 0, 0, diff), "constant", 0)
+        # if combi_s.shape[1] < rv.shape[0]:
+        #     diff = rv.shape[0] - combi_s.shape[1]
+        #     combi_s = F.pad(combi_s, (0, diff, 0, 0), "constant", 0)
+
+        # print(ru.shape, combi_s.shape, rv.T.shape)
+        u = qu
+        s = ru @ combi_s @ rv.T
+        # need to move the sign of the diagonal to U
+        # signs = torch.diag(torch.sign(torch.diag(s)))
+        # u = u @ signs
+        # s = torch.diag(s)
+        vh = qv.T
+        return u, s, vh
+
+    @torch.no_grad()
+    def _project_vectors_qr(
+        self,
+        u0,
+        s0,
+        vh0,
+        u1,
+        s1,
+        vh1,
+        max_vectors: int = 0.5,
+        min_s: float = 1e-4,
+    ):
+        # merge the orthogonal vectors using QR then cutting off the remainder (if more than curoff)
+        if max_vectors < 0:
+            max_vectors = int(s0.shape[0] * max_vectors)
+        # cut off last vectors (max_vectors) and values
+        v0, v1 = vh0.T, vh1.T
+
+        # TODO: should the max vectors be here or below??
         if max_vectors > 0:
-            u = u[:, :max_vectors]
-            s = s[:max_vectors]
-            vh = vh[:max_vectors]
+            u0, u1 = u0[:, :max_vectors], u1[:, :max_vectors]
+            s0, s1 = s0[:max_vectors, :max_vectors], s1[:max_vectors, :max_vectors]
+            v0, v1 = v0[:, :max_vectors], v1[:, :max_vectors]
+
+        # cat u's together on dim1
+        ucat = torch.cat([u0, u1], dim=1)
+        scat = torch.zeros(s0.shape[0] + s1.shape[0], s0.shape[1] + s1.shape[1],
+            device=s0.device, dtype=s0.dtype)
+        scat[:s0.shape[0], :s0.shape[1]] = s0
+        scat[s1.shape[0]:, s1.shape[1]:] = s1
+        # scat = torch.cat([s0, s1])
+        vcat = torch.cat([v0, v1], dim=0)
+        # Testing something: what if we ignored the order of the vectors for V and stacked them
+        # along the 0 dim?
+        # vhcat = torch.cat([vh0, vh1], dim=0)  # now TS
+        # print(f"ucat: {ucat.shape}, scat: {scat.shape}, vcat: {vcat.shape}")
+        # do qr
+        qu, ru = torch.linalg.qr(ucat, mode="reduced")
+        # TODO: may need the complete verson of this QR
+        #       this is because before the cat, the V's are square
+        # since the cat makes the QR of the Vs equal to Q0 @ R_combi, we can just comute R
+        qv, rv = torch.linalg.qr(vcat, mode="reduced")
+        # multiply R by the cat of s
+        # print(f"ucat: {ucat.shape}, scat: {scat.shape}, vcat: {vcat.shape}, qu: {qu.shape}, "
+        #       f"ru: {ru.shape}, qv: {qv.shape}, rv: {rv.shape}")
+        s = ru @ scat @ rv.T
+        # s = torch.diag(s)
+        u = qu
+        vh = qv.T
+
+        # TODO: fix me!
+        # need to have a common K (U: [m, k], S: [k], V: [k, n])
+        # s /= 2.
+        # s = torch.diag(torch.abs(torch.diag(s)))
+        # TODO: should this be sorted based on the order of S???
+        # shapes at end: [m, maxvec * 2], S: [maxvec * 2, maxvec * 2], V: [maxvec * 2, n]
         return u, s, vh
 
     @staticmethod
     def _get_sizes(u: torch.Tensor, s: torch.Tensor, vh: torch.Tensor) -> torch.Tensor:
-        sizes = torch.zeros(5, device=u.device, dtype=torch.int32)
+        sizes = torch.zeros(6, device=u.device, dtype=torch.int32)
         # factory = {"device": u.device, "dtype": u.dtype}
         sizes[0] = u.shape[0]
         sizes[1] = u.shape[1]
         sizes[2] = s.shape[0]
-        sizes[3] = vh.shape[0]
-        sizes[4] = vh.shape[1]
+        sizes[3] = s.shape[1]
+        sizes[4] = vh.shape[0]
+        sizes[5] = vh.shape[1]
         # buffu = torch.empty(u.shape, **factory)
         return sizes
 
@@ -221,30 +295,38 @@ class ProjectSVD:
         max_vectors=-1,
         min_s: float = 1e-4,
     ) -> tuple[dist.Work, torch.Tensor]:
-        # todo: make a tree merge pattern to merge all of the SVD stuff
+        # todo: make a tree merge pattern to merge all the SVD stuff
         trans = False
         if weights.shape[0] < weights.shape[1]:
             weights = weights.T
             trans = True
         locu, locs, locvh = torch.linalg.svd(weights, full_matrices=False)
+        # print(locs)
+
+        # vhwait = dist.all_reduce(locvh, op=dist.ReduceOp.AVG, async_op=True)
+
+        locs = torch.diag(locs)
         sizes = self._get_sizes(locu, locs, locvh)
         factory = {"device": weights.device, "dtype": weights.dtype}
-        buffu = torch.empty(sizes[:2], **factory)
-        buffs = torch.empty(sizes[2], **factory)
-        buffvh = torch.empty(sizes[3:], **factory)
-        if max_vectors > 0:
-            locu = locu[:, :max_vectors].contiguous()
-            locs = locs[:max_vectors].contiguous()
-            locvh = locvh[:max_vectors].contiguous()
-
-            buffu = buffu[:, :max_vectors].contiguous()
-            buffs = buffs[:max_vectors].contiguous()
-            buffvh = buffvh[:max_vectors].contiguous()
+        buffu = torch.empty(sizes[:2].tolist(), **factory)
+        buffs = torch.zeros(sizes[2:4].tolist(), **factory)
+        buffvh = torch.zeros(sizes[4:].tolist(), **factory)
+        # if max_vectors is None:
+        #     max_vectors = int(sizes[1] * 1.5)
+        # if max_vectors > 0:
+        #     locu = locu[:, :max_vectors].contiguous()
+        #     locs = locs[:max_vectors].contiguous()
+        #     locvh = locvh[:max_vectors].contiguous()
+        #
+        #     buffu = buffu[:, :max_vectors].contiguous()
+        #     buffs = buffs[:max_vectors].contiguous()
+        #     buffvh = buffvh[:max_vectors].contiguous()
         rank, size = dist.get_rank(), dist.get_world_size()
         # tree merge
 
         tree_width = size
         update_sizes = False
+        start_s = locs.shape[0]
         while True:
             # todo: create new buffers each loop, the number of vecs may change...
             rem = int(tree_width % 2)
@@ -256,78 +338,102 @@ class ProjectSVD:
                 # if tree_width <= 0:
                 #     # should never happen in this loop, rems should always be touched
                 #     break
-                print(f"rank {rank} skipping, tree width: {tree_width}, rem: {rem}")
+                # print(f"rank {rank} skipping, tree width: {tree_width}, rem: {rem}")
                 continue
             if rank >= tree_width:
                 # todo: make sure that this is okay
-                print(f"rank {rank} breaking, tree width: {tree_width}, rem: {rem}")
+                # print(f"rank {rank} breaking, tree width: {tree_width}, rem: {rem}")
                 break
-            target = rem + (rank % cutoff)  # should work on everything unless there is a remainder
-            recv = rank <= cutoff
-            send = rank > cutoff
+            # target = rem + (rank % cutoff)  # should work on everything unless there is a remainder
+            target = rem + (rank - cutoff)
+            src = rem + (rank + cutoff)
+            recv = rank < cutoff
+            send = rank >= cutoff
             if send:
-                print(f"rank {rank} merging, tree width: {tree_width}, rem: {rem}, pair: {target}")
-                waitu = dist.isend(locu, dst=target, tag=0)
-                waits = dist.isend(locs, dst=target, tag=1)
-                waitvh = dist.isend(locvh, dst=target, tag=2)
+                locu = locu.contiguous()
+                locs = locs.contiguous()
+                locvh = locvh.contiguous()
+                # print(f"rank {rank} send, tree width: {tree_width}, rem: {rem}, pair: {target}")
                 if update_sizes:
                     sizes = self._get_sizes(u=locu, s=locs, vh=locvh)
                     dist.send(sizes, dst=target, tag=3)
+                waitu = dist.isend(locu, dst=target, tag=0)
+                waits = dist.isend(locs, dst=target, tag=1)
+                waitvh = dist.isend(locvh, dst=target, tag=2)
             else:  # if recv:
-                print(
-                    f"rank {rank} merging, tree width: {tree_width}, rem: {rem}, pair: {rank + cutoff}",
-                )
+                # print(
+                #     f"rank {rank} rcv, tree width: {tree_width}, rem: {rem}, pair: {rank + cutoff}",
+                # )
                 if update_sizes:
                     sizes.zero_()
                     dist.recv(sizes, src=rank + cutoff, tag=3)
-                    buffu = torch.empty(sizes[:2], **factory)
-                    buffs = torch.empty(sizes[2], **factory)
-                    buffvh = torch.empty(sizes[3:], **factory)
+                    buffu = torch.zeros(sizes[:2].tolist(), **factory)
+                    buffs = torch.zeros(sizes[2:4].tolist(), **factory)
+                    buffvh = torch.zeros(sizes[4:].tolist(), **factory)
                 waitu = dist.irecv(buffu, src=rank + cutoff, tag=0)
                 waits = dist.irecv(buffs, src=rank + cutoff, tag=1)
                 waitvh = dist.irecv(buffvh, src=rank + cutoff, tag=2)
-
+            # print('waiting...')
             waitu.wait()
             waits.wait()
             waitvh.wait()
+            # print('done waiting')
             if send:
                 # break off the other ranks which are not used anymore
+                # print('breaking')
                 break
 
             # have the buffers on the recv ranks
             if recv:
-                locu, locs, locvh = self._project_vectors(
+                locu, locs, locvh = self._project_vectors_qr(
+                # locu, locs = self._project_vectors_qr_complete(
                     u0=locu,
                     s0=locs,
                     vh0=locvh,
                     u1=buffu,
                     s1=buffs,
                     vh1=buffvh,
-                    max_vectors=max_vectors,
+                    max_vectors=start_s // tree_width,
                     min_s=min_s,
                 )
-                update_sizes = True
+            update_sizes = True
 
             tree_width -= cutoff
             if tree_width <= 1:
+                # print('breaking')
                 break
 
         # TODO: remove me! DEBUG only
-        dist.barrier()
-
+        # print('before barrier')
+        # dist.barrier()
+        # print('after barrier')
+        # vhwait.wait()
         # TODO: reduce memory hit??
-        new_weights = torch.linalg.multi_dot(locu, torch.diag(locs), locvh)
-        weights = new_weights.T if trans else new_weights
+        # if rank != 0:
+        # weights *= 0
+        # print(torch.diag(locs))
+        if rank == 0:
+            # print(locu.shape, locs.shape, locvh.shape)
 
-        if rank != 0:
-            weights *= 0
+            if locs.ndim == 1:
+                locs = torch.diag(locs)
+            # sort to get top, then slice
+            # locs_hold = torch.diag(locs)
+            # vals, inds = torch.sort(locs_hold, descending=True)
+            # locu = locu[:, inds[:locvh.shape[0]]]
+            # locs = vals[:locvh.shape[0]]
+            # print(locu)
+            new_weights = torch.linalg.multi_dot([locu, locs, locvh])
+            weights = new_weights.T if trans else new_weights
+        weights = weights.contiguous()
         # send the updated weights to all ranks (can be nonblocking)
-        weights_wait = dist.broadcast(weights, src=0, async_op=True)
+        # TODO: make this nonblocking
+        dist.broadcast(weights, src=0, async_op=False)
 
-        return weights_wait, weights
+        return weights
 
     @torch.no_grad()
-    def merge_weights(self, sync_level="all"):
+    def project_weights(self, sync_level="all"):
         waits = []
         wait2 = {}
         for n, p in self.network.named_parameters():
@@ -348,20 +454,21 @@ class ProjectSVD:
                 self.param_buffers[n]["lpweights"] = lpweights.contiguous()
             else:
                 self.param_buffers[n]["lpweights"].zero_()
-                self.param_buffers[n]["lpweights"].add_(lpweights)
+                self.param_buffers[n]["lpweights"].add_(lpweights.clone())
 
             wait2[n] = self.merge_svd(
                 weights=self.param_buffers[n]["lpweights"],
                 max_vectors=self.max_vectors,
                 min_s=self.min_s,
             )
+            wait2[f"{n}-shp"] = shp
         for w in waits:
             w.wait()
-        for key in wait2:
-            wait2[key][0].wait()
+        # for key in wait2:
+        #     wait2[key][0].wait()
         for n, p in self.network.named_parameters():
             if n in wait2:
-                p.set_(wait2[n][1])
+                p.set_(wait2[n].view(wait2[f"{n}-shp"]))
 
 
 class ProjectWeightsHoldQ:
@@ -701,98 +808,50 @@ class ProjectWeightsQR:
         self.network = network
         self.rank = dist.get_rank()
         self.param_buffers = {}
+        self.noise = {}
         for n, p in self.network.named_parameters():
-            if not p.requires_grad or p.ndim == 1:
+            if not p.requires_grad:
+                continue
+            self.param_buffers[n] = {}
+            if p.ndim == 1:
+                self.param_buffers[n]["old_weights"] = None
                 continue
 
             # original plan was to average q then do the mult,
             # new plan is to average r, then do mult, then do average
-            self.param_buffers[n] = {}
             self.param_buffers[n]["q"] = None
             self.param_buffers[n]["r"] = None
             self.param_buffers[n]["lpweights"] = None
+            self.noise[n] = None
 
-        method_options = ["avg_q_avg_qr", "vecnorm", "wahba"]
+        method_options = ["avg_q_avg_qr", "vecnorm", "wahba", "uber_vecnorm"]
         if method not in method_options:
             raise ValueError(f"method ({method}) must be one of {method_options}")
         self.project_method = method
+        self.set_network_copy()
+        # torch.distributions.normal.Normal(torch.tensor([0.0]), torch.tensor([1.0]))
 
     @torch.no_grad()
-    def _iterate_param_buffers(self, skip_send=False):
-        # TODO: abstract iterator??
-        pass
-
-    @torch.no_grad()
-    def wahba_rotation(self, sync_level: str | None = None, qr_mode: str = "reduced") -> None:
-        # merging based on the Wahba rotation matrix
-        # 0: bcast the lpweights from rank0
-        # 1: (2 ideas both use mean of dim=0)
-        #   a: find the centroids of the points local to that process
-        #   b: find the centroids of points on all processes
-        # 2: find H -> H = (A - centroidsA) @ (B - centroidsB).T
-        # 3: u, s, vh = svd(H)
-        # 4: R = v.T @ u.T
-        # 5: skipping translate step
-
-        if sync_level is None:
-            sync_level = "all"
-
-        case = 1  # case for step 1
-
-        waits = []
-        # wait2 = {}
+    def set_network_copy(self):
         for n, p in self.network.named_parameters():
-            if not p.requires_grad:
-                continue
-            if p.ndim == 1:
-                waits.append(dist.all_reduce(p.data, dist.ReduceOp.AVG, async_op=True))
-                continue
-            if sync_level == "1d":
-                continue
+            if p.requires_grad:
+                self.param_buffers[n]["old_weights"] = p.data.clone()
 
-            lpweights, shp = self._get_weight_shape(param=p)
-            if lpweights.shape[0] >= lpweights.shape[1]:  # already TS of similar
-                lpweights = lpweights.T  # .contiguous())
+    @torch.no_grad()
+    def get_network_difference(self):
+        diffs = {}
+        for n, p in self.network.named_parameters():
+            if p.requires_grad:
+                dist.all_reduce(p.data, op=dist.ReduceOp.AVG)
+                diffs[n] = self.param_buffers[n]["old_weights"] - p.data
+        return diffs
 
-            if self.param_buffers[n]["lpweights"] is None:
-                self.param_buffers[n]["lpweights"] = lpweights.contiguous()
-            else:
-                self.param_buffers[n]["lpweights"].zero_()
-                self.param_buffers[n]["lpweights"].add_(lpweights)
-
-            if self.rank != 0:
-                self.param_buffers[n]["lpweights"].zero_()
-
-            # step 0 - bcast lpweights (nonblocking)
-            dist.broadcast(self.param_buffers[n]["lpweights"], src=0, async_op=False)
-            # FIXME: skipping the overlap for now, can optimize after its working
-
-            if self.rank != 0:  # don't need to do anything on rank 0 as it is not rotated
-                # step1:
-                if case == 1:
-                    loc_mean = lpweights.mean(0)
-                    rank0 = self.param_buffers[n]["lpweights"]
-                    # h = (loc - mean_loc) @ (rank0 - mean_0).T
-                    h = (lpweights - loc_mean) @ (rank0 - rank0.mean(0)).T
-                    u, s, vh = torch.linalg.svd(h, full_matrices=True)
-                    r = vh.T @ u.T
-                    lpweights = r @ lpweights
-
-            # new = lpweights.contiguous()
-            # dist.all_reduce(new, op=dist.ReduceOp.AVG)
-            # print(lpweights, shp, )
-            if lpweights.shape[0] >= lpweights.shape[1]:  # already TS of similar
-                # NOTE: this will take more time!
-                p.data.set_(lpweights.T.reshape(shp))  # .contiguous())
-            else:
-                p.data.set_(lpweights.reshape(shp))  # .contiguous())
-
-            if sync_level == "all":
-                p.data.set_(p.data.contiguous())
-                waits.append(dist.all_reduce(p.data, dist.ReduceOp.AVG, async_op=True))
-
-        for w in waits:
-            w.wait()
+    @torch.no_grad()
+    def update_network(self, updates: dict):
+        for n, p in self.network.named_parameters():
+            if p.requires_grad and p.data.ndim > 1:
+                p.data.set_(self.param_buffers[n]["old_weights"] - updates[n])
+                self.param_buffers[n]["old_weights"] -= updates[n]
 
     @torch.no_grad()
     def _set_qr_dict(self, name, q, r):
@@ -809,8 +868,21 @@ class ProjectWeightsQR:
             self.param_buffers[name]["q"].add_(q)
 
     @torch.no_grad()
+    def apply_noise(self):
+        noise = None
+        for n, p in self.network.named_parameters():
+            if p.requires_grad and p.ndim > 1:
+                # if noise is None:
+                #     noise = torch.distributions.normal.Normal(
+                #         torch.tensor([0.], device=p.data.device),
+                #         torch.tensor([1.], device=p.data.device)
+                #     )
+                # p.add_(noise.sample(p.shape))
+                p.add_(torch.randn_like(p.data))
+
+    @torch.no_grad()
     def _get_weight_shape(self, param):
-        weights = param.data
+        weights = param
         shp = weights.shape
 
         if weights.ndim > 2:
@@ -818,6 +890,91 @@ class ProjectWeightsQR:
         else:
             lpweights = weights
         return lpweights, shp
+
+    @torch.no_grad()
+    def uber_sum_vecnorm_merge(
+        self, losses, sync_level: str | None = None, qr_mode: str = "reduced"
+    ) -> None:
+        """
+        use the uber gradient (the difference of the network from the last updat to now) and do
+        the same steps as the other vecnorm update. however, this will then scale the updates
+        based on which one had the best loss value
+
+        This will do a sum of the Q matrices, then it will normalize them to make Q orthogonal
+        once more. Then it will find the weights W from the new QR, then it averages the weights
+
+        Attributes
+        ----------
+        sync_level: optional, str
+            control what should be synced. options:
+                all: (default) do full sync
+                q: only sync q as detailed, skip full w sync
+        qr_mode: str
+            mode for the QR decomp. default: "reduced"
+        """
+        if sync_level is None:
+            sync_level = "all"
+        # TODO: should the BN be viewed as an orthogonal transform?
+        # in this method, sum up the Q matrices, then normalize them all to be orthonormal again
+        waits = []
+        wait2 = {}
+        losses_diff = losses / losses.mean()  # todo: correct?
+        # print(losses_diff)
+        updates = self.get_network_difference()
+        for n, p in self.network.named_parameters():
+            if not p.requires_grad:
+                continue
+
+            if p.ndim == 1:
+                waits.append(dist.all_reduce(p.data, dist.ReduceOp.AVG, async_op=True))
+                # waits.append(dist.all_reduce(updates[n], dist.ReduceOp.AVG, async_op=True))
+                continue
+
+            lpweights, _ = self._get_weight_shape(param=updates[n])
+
+            # Q0 = P x Qlocal -> P = Q0 x Qlocal.T
+            if lpweights.shape[0] >= lpweights.shape[1]:  # already TS of similar
+                localq, localr = torch.linalg.qr(lpweights, mode=qr_mode)
+            else:
+                localq, localr = torch.linalg.qr(lpweights.T, mode=qr_mode)
+            # if sync_level in ['r', 'all']:  # sync only R
+            self._set_qr_dict(name=n, q=localq, r=localr)
+
+            wait2[n] = dist.all_reduce(
+                self.param_buffers[n]["q"],
+                dist.ReduceOp.SUM,  # TODO: AVG or SUM?
+                async_op=True,
+            )
+
+        for n, p in self.network.named_parameters():
+            if not p.requires_grad or p.ndim == 1:
+                continue
+
+            lpweights, shp = self._get_weight_shape(param=updates[n])
+
+            # Q0 = P x Qlocal -> P = Q0 x Qlocal.T
+            if lpweights.shape[0] >= lpweights.shape[1]:  # already TS of similar
+                trans = False
+            else:
+                trans = True
+            wait2[n].wait()
+            # =========== difference from other methods =================
+            q = self.param_buffers[n]["q"]
+            self.param_buffers[n]["q"] = F.normalize(q, dim=1, p=2.0)
+            # =========== difference from other methods =================
+            r = self.param_buffers[n]["r"] * losses_diff[dist.get_rank()]
+            new = self.param_buffers[n]["q"] @ r
+            updates[n].zero_()
+            if trans:
+                updates[n].add_(new.T.view(shp))  # .contiguous())
+            else:
+                updates[n].add_(new.view(shp))  # .contiguous())
+            if sync_level == "all":
+                waits.append(dist.all_reduce(updates[n], dist.ReduceOp.AVG, async_op=True))
+        for w in waits:
+            w.wait()
+        # update the weights here!
+        self.update_network(updates)
 
     @torch.no_grad()
     def sum_vecnorm_merge(self, sync_level: str | None = None, qr_mode: str = "reduced") -> None:
@@ -1039,8 +1196,13 @@ class ProjectWeightsQR:
             w.wait()
 
     @torch.no_grad()
-    def project_weights(self, sync_level="all", qr_mode="reduced"):  # noqa: C901
-        if self.project_method == "vecnorm":
+    def project_weights(self, loss=None, sync_level="all", qr_mode="reduced"):  # noqa: C901
+        if self.project_method == "uber_vecnorm":
+            losses = torch.zeros(dist.get_world_size()).cuda()
+            losses[dist.get_rank()] = loss
+            dist.all_reduce(losses, op=dist.ReduceOp.SUM)
+            return self.uber_sum_vecnorm_merge(losses=losses, sync_level=sync_level, qr_mode=qr_mode)
+        elif self.project_method == "vecnorm":
             return self.sum_vecnorm_merge(sync_level=sync_level, qr_mode=qr_mode)
         elif self.project_method == "avg_q_avg_qr":
             return self.avg_q_avg_qr(sync_level=sync_level, qr_mode=qr_mode)

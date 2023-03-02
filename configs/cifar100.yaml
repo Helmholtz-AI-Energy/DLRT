@@ -17,10 +17,10 @@ resume: null  # path to latest checkpoint (default: none)
 evaluate: False
 pretrained: False
 seed: 42
-run_name: ddphalf-vn-avg
+run_name: svd-testing
 qr_mode: reduced
-qr_merge_method: vecnorm
-qr_sync_frequency: 20
+qr_merge_method: uber_vecnorm
+qr_sync_frequency: -1
 
 # network
 #arch: efficientnet_v2_s
@@ -28,7 +28,7 @@ arch: resnet50
 mixed: False
 local_batch_size: 256  # 512 -> OOM error
 # learning rate
-learning_rate: 0.5
+learning_rate: 0.4
 label_smoothing: 0.1
 qr_warmup: -1
 lr_schedule:
@@ -38,7 +38,7 @@ lr_schedule:
   name: StepLR
   params:
     step_size: 125
-    gamma: 0.1
+    gamma: 0.5
 #  name: CosineAnnealingWarmRestarts
 #  params:
 #    eta_min: 0
@@ -64,9 +64,9 @@ optimizer:
 #    amsgrad: False
   name: SGD
   params:
-    momentum: 0.9
-    weight_decay: 0.0005
-    nesterov: True
+    momentum: 0.0
+    weight_decay: 0.0000
+    nesterov: False
 
 # DLRT params
 dlrt:

@@ -118,8 +118,8 @@ def main(config):  # noqa: C901
     model.cuda(config["gpu"])
     device = torch.device(f"cuda:{config['gpu']}")
 
-    if dist.is_initialized():
-        ddpmodel = torch.nn.parallel.DistributedDataParallel(model)
+    # if dist.is_initialized():
+    #     ddpmodel = torch.nn.parallel.DistributedDataParallel(model)
 
     criterion = nn.CrossEntropyLoss(label_smoothing=config["label_smoothing"]).to(device)
     optimizer = getattr(torch.optim, config["optimizer"]["name"])(
@@ -243,7 +243,7 @@ def main(config):  # noqa: C901
             warmup_scheduler=warmup_scheduler,
             projector=projector,
             lr_schedule=scheduler,
-            ddpmodel=ddpmodel,
+            # ddpmodel=ddpmodel,
         )
         # else:
         # # with model.no_sync():
@@ -308,7 +308,7 @@ def train(
     warmup_scheduler,
     projector: ProjectWeightsQR,
     lr_schedule,
-    ddpmodel,
+    ddpmodel=None,
 ):
     batch_time = AverageMeter("Time", ":6.3f")
     data_time = AverageMeter("Data", ":6.3f")
@@ -330,7 +330,8 @@ def train(
         sync_mod = -1
     else:
         sync_mod = config["qr_sync_frequency"]
-
+    # if epoch > 5:
+    #     projector.apply_noise()
     for i, (images, target) in enumerate(train_loader):
         # if dist.get_rank() == 0:
         #     print("step", i)
@@ -341,7 +342,7 @@ def train(
         # move data to the same device as model
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
-        if i % sync_mod < sync_mod // 2:
+        if ddpmodel is not None and i % sync_mod < sync_mod // 2:
             output = ddpmodel(images)
         else:
             output = model(images)
@@ -350,10 +351,10 @@ def train(
 
         optimizer.step()
 
-        # if epoch < 5 or i == len(train_loader) - 1:
-        # if i == :
-        if (end_sync and i == len(train_loader) - 1) or i % sync_mod == sync_mod - 1:
-            projector.project_weights(sync_level="all")
+        losses.update(loss.item(), images.size(0))
+        if epoch > -1:
+            if (end_sync and i == len(train_loader) - 1) or i % sync_mod == sync_mod - 1:
+                projector.project_weights(sync_level="all")
         # elif i % 2 == 0:
         #     projector.project_weights(sync_level="q")
         # else:
@@ -366,7 +367,6 @@ def train(
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        losses.update(loss.item(), images.size(0))
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
 
